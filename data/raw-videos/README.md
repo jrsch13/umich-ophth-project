@@ -1,0 +1,1 @@
+This folder is where the raw research videos lie, and are never modified. 

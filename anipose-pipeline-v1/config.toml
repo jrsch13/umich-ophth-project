@@ -1,0 +1,63 @@
+# v1 Project Settings
+
+project = "anipose-pipeline-v1"
+
+# Path to the DeepLabCut project/model.
+# Replace this once we have the DLC model set up.
+#
+# On Windows, forward slashes are easiest:
+model_folder = "C:/Users/jrsch/Documents/umich-ophth-anipose/models/YOUR_DLC_PROJECT"
+
+# Folder structure:
+#
+# anipose-pipeline-v1/
+#     sample01/
+#         videos-raw/
+#
+# There is one folder ("sample01") between the project root
+# and videos-raw, so nesting = 1.
+nesting = 1
+
+
+# -----------------------------
+# Input/output pipeline
+# -----------------------------
+
+[pipeline]
+
+videos_raw = "videos-raw"
+
+
+# -----------------------------
+# 2D filtering
+# -----------------------------
+
+[filter]
+
+enabled = true
+
+# Length of median filter used to identify tracking jumps.
+medfilt = 13
+
+# Maximum deviation from the median-filtered trajectory,
+# in pixels, before a point is treated as an outlier.
+offset_threshold = 25
+
+# Pose predictions below this confidence are treated as bad.
+score_threshold = 0.8
+
+# Use cubic spline interpolation for rejected/missing points.
+spline = true
+
+
+# -----------------------------
+# Visualization
+# -----------------------------
+
+[labeling]
+
+# We'll replace these names once we know exactly
+# which bodyparts the pose model outputs.
+scheme = [
+    ["left_shoulder", "right_shoulder"]
+]
