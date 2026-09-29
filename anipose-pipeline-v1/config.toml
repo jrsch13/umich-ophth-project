@@ -2,38 +2,18 @@
 
 project = "anipose-pipeline-v1"
 
-# Path to the DeepLabCut project/model.
-# Replace this once we have the DLC model set up.
-#
-# On Windows, forward slashes are easiest:
-model_folder = "C:/Users/jrsch/Documents/umich-ophth-anipose/models/YOUR_DLC_PROJECT"
+# Path to the DeepLabCut model generated via setup_baseline_model.py
+model_folder = "C:/Users/jrsch/Documents/umich-ophth-anipose/models/ophtho-baseline-human-Jason-2026-09-29"
 
-# Folder structure:
-#
-# anipose-pipeline-v1/
-#     sample01/
-#         videos-raw/
-#
-# There is one folder ("sample01") between the project root
-# and videos-raw, so nesting = 1.
+# There is one folder ("sample01") between the project rootand videos-raw, so nesting = 1.
 nesting = 1
 
-
-# -----------------------------
 # Input/output pipeline
-# -----------------------------
-
 [pipeline]
-
 videos_raw = "videos-raw"
 
-
-# -----------------------------
 # 2D filtering
-# -----------------------------
-
 [filter]
-
 enabled = true
 
 # Length of median filter used to identify tracking jumps.
@@ -49,15 +29,15 @@ score_threshold = 0.8
 # Use cubic spline interpolation for rejected/missing points.
 spline = true
 
-
-# -----------------------------
 # Visualization
-# -----------------------------
-
+# TODO: replace these names once we know exactly which bodyparts the pose model outputs.
 [labeling]
-
-# We'll replace these names once we know exactly
-# which bodyparts the pose model outputs.
 scheme = [
-    ["left_shoulder", "right_shoulder"]
+    ["shoulder1", "shoulder2"],
+    ["shoulder1", "hip1"],
+    ["shoulder2", "hip2"],
+    ["hip1", "hip2"],
+    ["shoulder1", "elbow1", "wrist1"],
+    ["shoulder2", "elbow2", "wrist2"],
+    ["chin", "forehead"]
 ]
