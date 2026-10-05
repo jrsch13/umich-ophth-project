@@ -8,6 +8,9 @@ model_folder = "C:/Users/jrsch/Documents/umich-ophth-anipose/models/ophtho-basel
 # There is one folder ("sample01") between the project rootand videos-raw, so nesting = 1.
 nesting = 1
 
+# anipose defaults to .avi files, have to declare the video extension before the [pipeline] portion of the code
+video_extension = "MOV"
+
 # Input/output pipeline
 [pipeline]
 videos_raw = "videos-raw"

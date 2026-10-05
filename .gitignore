@@ -1,17 +1,11 @@
-# Python
-__pycache__/
-*.pyc
-.venv/
-.env/
-
-# DeepLabCut models / downloaded weights
+# DeepLabCut model projects / weights
 models/
 
-# Raw research videos
+# Raw videos
 data/raw-videos/
 **/videos-raw/
 
-# Anipose generated outputs
+# Generated Anipose outputs
 **/pose-2d/
 **/pose-2d-filtered/
 **/pose-3d/
@@ -23,3 +17,7 @@ data/raw-videos/
 *.mov
 *.mp4
 *.avi
+
+# Python
+__pycache__/
+*.pyc
