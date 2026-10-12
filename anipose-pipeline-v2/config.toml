@@ -29,11 +29,6 @@ spline = false
 # Visualization
 [labeling]
 scheme = [
-    ["shoulder1", "shoulder2"],
-    ["shoulder1", "hip1"],
-    ["shoulder2", "hip2"],
-    ["hip1", "hip2"],
-    ["shoulder1", "elbow1", "wrist1"],
-    ["shoulder2", "elbow2", "wrist2"],
-    ["chin", "forehead"]
+    ["hip1", "shoulder1", "chin"],
+    ["shoulder1", "elbow1", "wrist1"]
 ]
