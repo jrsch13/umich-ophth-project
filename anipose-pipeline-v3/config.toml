@@ -1,0 +1,33 @@
+# v3 Project Settings
+
+project = "anipose-pipeline-v3"
+
+model_folder = "C:/Users/jrsch/Documents/umich-ophth-anipose/models/ophtho-baseline-human-Jason-2026-09-29"
+
+nesting = 1
+video_extension = "mp4"
+
+[pipeline]
+videos_raw = "videos-raw"
+
+[filter]
+enabled = true
+
+medfilt = 13
+offset_threshold = 25
+
+# v3 experiment:
+# lower confidence threshold from 0.8 to 0.75
+score_threshold = 0.75
+
+# Keep linear interpolation from v2
+spline = false
+
+[labeling]
+scheme = [
+    ["hip1", "shoulder1", "chin", "forehead"],
+    ["shoulder1", "elbow1", "wrist1"],
+    ["hip1", "knee1", "ankle1"],
+    ["shoulder1", "shoulder2"],
+    ["hip1", "hip2"]
+]
