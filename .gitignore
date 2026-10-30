@@ -20,7 +20,9 @@ data/raw-videos/
 
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+station-service/.venv/
+station-service/camera_config.json
 
 # React / Vite
 **/node_modules/
