@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from camera_config import load_config, save_config
-from cameras import detect_cameras
+from cameras import detect_cameras, stream_camera_preview
 
 app = FastAPI(title="Station Service", version="0.1.0")
 app.add_middleware(
@@ -27,6 +27,11 @@ def health() -> dict[str, str]:
 @app.get("/cameras")
 def get_cameras() -> dict[str, list[dict[str, Any]]]:
     return {"cameras": detect_cameras()}
+
+
+@app.get("/cameras/{camera_id}/preview")
+async def get_camera_preview(camera_id: int, request: Request):
+    return await stream_camera_preview(camera_id, request)
 
 
 @app.get("/camera-config")
