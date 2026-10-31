@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -8,8 +10,16 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from camera_config import load_config, save_config
 from cameras import detect_cameras, stream_camera_preview
+from session_manager import SessionError, session_manager
 
-app = FastAPI(title="Station Service", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    await asyncio.to_thread(session_manager.shutdown)
+
+
+app = FastAPI(title="Station Service", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:8000"],
@@ -37,6 +47,42 @@ async def get_camera_preview(camera_id: int, request: Request):
 @app.get("/camera-config")
 def get_camera_config() -> dict[str, Any]:
     return load_config()
+
+
+class SessionStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resident_id: str
+    session_label: str
+
+    @field_validator("resident_id", "session_label")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("This field cannot be empty.")
+        return normalized
+
+
+@app.post("/sessions/start")
+def start_session(request: SessionStartRequest) -> dict[str, Any]:
+    try:
+        return session_manager.start(request.resident_id, request.session_label)
+    except SessionError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+@app.post("/sessions/stop")
+def stop_session() -> dict[str, Any]:
+    try:
+        return session_manager.stop()
+    except SessionError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+@app.get("/sessions/current")
+def get_current_session() -> dict[str, Any]:
+    return session_manager.current()
 
 
 class CameraConfigUpdate(BaseModel):

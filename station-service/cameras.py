@@ -16,7 +16,7 @@ _camera_locks: dict[int, threading.Lock] = {}
 _camera_locks_guard = threading.Lock()
 
 
-def _camera_lock(index: int) -> threading.Lock:
+def camera_lock(index: int) -> threading.Lock:
     with _camera_locks_guard:
         if index not in _camera_locks:
             _camera_locks[index] = threading.Lock()
@@ -29,7 +29,7 @@ def _camera_backend() -> int:
     return cv2.CAP_ANY
 
 
-def _open_camera(index: int) -> cv2.VideoCapture | None:
+def open_camera(index: int) -> cv2.VideoCapture | None:
     camera = None
     try:
         camera = cv2.VideoCapture(index, _camera_backend())
@@ -56,13 +56,13 @@ def _open_camera(index: int) -> cv2.VideoCapture | None:
 
 
 def detect_camera(index: int, name: str) -> dict[str, Any] | None:
-    lock = _camera_lock(index)
+    lock = camera_lock(index)
     if not lock.acquire(timeout=10):
         return None
 
     camera = None
     try:
-        camera = _open_camera(index)
+        camera = open_camera(index)
         if camera is None:
             return None
 
@@ -153,14 +153,14 @@ async def stream_camera_preview(camera_id: int, request: Request) -> StreamingRe
     if camera_id < 0 or camera_id > 8:
         raise HTTPException(status_code=404, detail="Camera ID must be between 0 and 8.")
 
-    lock = _camera_lock(camera_id)
+    lock = camera_lock(camera_id)
     acquired = await asyncio.to_thread(lock.acquire, True, 5)
     if not acquired:
         raise HTTPException(status_code=503, detail="This camera is already in use.")
 
     camera = None
     try:
-        camera = _open_camera(camera_id)
+        camera = open_camera(camera_id)
         if camera is None:
             raise HTTPException(status_code=404, detail="Camera is unavailable.")
 

@@ -23,6 +23,7 @@ __pycache__/
 *.py[cod]
 station-service/.venv/
 station-service/camera_config.json
+station-service/sessions/
 
 # React / Vite
 **/node_modules/

@@ -19,7 +19,23 @@ uvicorn app:app --reload --host 127.0.0.1 --port 8000
 - `GET /cameras/{camera_id}/preview` streams the selected camera as MJPEG
 - `GET /camera-config` returns the current saved station configuration
 - `PUT /camera-config` saves the Side and Rear camera assignments
+- `POST /sessions/start` starts recording the configured cameras
+- `POST /sessions/stop` stops recording and finalizes session files
+- `GET /sessions/current` returns active recording state for page recovery
+
+Start a session with JSON such as:
+
+```json
+{
+  "resident_id": "TEST001",
+  "session_label": "Slit lamp practice"
+}
+```
 
 The runtime config is stored in `station-service/camera_config.json`. An example config is provided in `camera_config.example.json`.
 
 The preview endpoint holds a per-camera lock for the lifetime of the stream, preventing discovery or another preview from opening the same camera concurrently. The camera handle is released when the stream ends or its client disconnects. Previews are reduced to at most 640x360 and approximately 15 FPS to limit CPU usage.
+
+Recording sessions are stored under `station-service/sessions/`. Each session contains metadata, an `analysis_status.json` marker created on stop, and one MP4 plus per-frame timestamp CSV for each configured camera. Camera timestamps use one shared monotonic session start reference; this is software synchronization, not hardware synchronization.
+
+The service takes exclusive per-camera locks while recording. Stopping the service also stops and finalizes an active session.
