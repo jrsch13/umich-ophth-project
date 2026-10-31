@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import threading
 import time
 from datetime import datetime
@@ -8,6 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import cv2
+
+from cameras import camera_name
+
+
+logger = logging.getLogger(__name__)
 
 
 class CameraRecorder:
@@ -64,6 +70,13 @@ class CameraRecorder:
 
     def _record(self) -> None:
         frame = self.first_frame
+        logger.info(
+            "event=record_thread_started operation=record camera_id=%s name=%r role=%s thread=%s",
+            self.camera_id,
+            camera_name(self.camera_id),
+            self.role,
+            threading.current_thread().name,
+        )
         try:
             while not self._stop_event.is_set():
                 if frame is None:
@@ -105,6 +118,7 @@ class CameraRecorder:
                 return
             self._cleaned = True
 
+        release_started = time.perf_counter()
         try:
             self.writer.release()
         finally:
@@ -115,3 +129,18 @@ class CameraRecorder:
                     self.camera.release()
                 finally:
                     self.lock.release()
+                    logger.info(
+                        "event=camera_release operation=record-close camera_id=%s name=%r role=%s thread=%s release_ms=%.1f",
+                        self.camera_id,
+                        camera_name(self.camera_id),
+                        self.role,
+                        threading.current_thread().name,
+                        (time.perf_counter() - release_started) * 1000,
+                    )
+                    logger.info(
+                        "event=camera_lock_released operation=record-close camera_id=%s name=%r role=%s thread=%s",
+                        self.camera_id,
+                        camera_name(self.camera_id),
+                        self.role,
+                        threading.current_thread().name,
+                    )

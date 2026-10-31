@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SectionHeader from '../components/SectionHeader'
 import StatusPill from '../components/StatusPill'
 
@@ -164,7 +164,7 @@ function CameraCard({
   const [previewFailed, setPreviewFailed] = useState(false)
   const onFailureChange = useCallback((failed) => setPreviewFailed(failed), [])
   const displayedStatus = previewFailed && value !== null ? 'Needs Attention' : status
-  const statusTone = displayedStatus === 'Ready' ? 'success' : 'warning'
+  const statusTone = displayedStatus === 'Ready' ? 'success' : displayedStatus === 'Busy' ? 'neutral' : 'warning'
 
   useEffect(() => {
     setPreviewFailed(false)
@@ -181,12 +181,12 @@ function CameraCard({
       </div>
 
       <div className='camera-preview large'>
-        {isLoading ? (
+        {isLoading && !cameraDetected ? (
           <span>Scanning cameras...</span>
         ) : value === null ? (
           <span>Select a camera to see its live preview.</span>
         ) : !cameraDetected ? (
-          <span>Selected camera is not currently detected. Rescan cameras.</span>
+          <span>Selected camera is disconnected or unavailable. Reconnect it and rescan cameras.</span>
         ) : (
           <CameraPreview
             key={value}
@@ -222,12 +222,15 @@ function CameraCard({
 
 export default function Cameras() {
   const [cameras, setCameras] = useState([])
+  const [hasScanned, setHasScanned] = useState(false)
   const [sideCameraId, setSideCameraId] = useState(null)
   const [rearCameraId, setRearCameraId] = useState(null)
   const [isScanning, setIsScanning] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
   const [saveMessage, setSaveMessage] = useState('')
+  const scanControllerRef = useRef(null)
+  const scanRequestIdRef = useRef(0)
 
   const cameraLookup = useMemo(
     () => Object.fromEntries(cameras.map((camera) => [camera.id, camera])),
@@ -239,8 +242,14 @@ export default function Cameras() {
   const sideCamera = sideCameraId !== null ? cameraLookup[sideCameraId] ?? null : null
   const rearCamera = rearCameraId !== null ? cameraLookup[rearCameraId] ?? null : null
 
-  const sideStatus = sideCamera && !duplicateSelection ? 'Ready' : 'Needs Attention'
-  const rearStatus = rearCamera && !duplicateSelection ? 'Ready' : 'Needs Attention'
+  const getCameraStatus = (camera, duplicate) => {
+    if (!camera || !camera.connected || duplicate) return 'Needs Attention'
+    if (camera.availability === 'busy') return 'Busy'
+    if (camera.availability === 'unavailable') return 'Needs Attention'
+    return 'Ready'
+  }
+  const sideStatus = getCameraStatus(sideCamera, duplicateSelection)
+  const rearStatus = getCameraStatus(rearCamera, duplicateSelection)
 
   const sideResolution = sideCamera ? `${sideCamera.width ?? '—'} × ${sideCamera.height ?? '—'}` : 'Not detected'
   const rearResolution = rearCamera ? `${rearCamera.width ?? '—'} × ${rearCamera.height ?? '—'}` : 'Not detected'
@@ -249,15 +258,15 @@ export default function Cameras() {
 
   const cameraOptions = cameras.map((camera) => ({
     id: camera.id,
-    label: `${camera.name || `Camera ${camera.id}`} (Camera ${camera.id}) — ${camera.width ?? '—'} × ${camera.height ?? '—'} @ ${camera.fps ? `${camera.fps} fps` : 'fps n/a'}`,
+    label: `${camera.name || `Camera ${camera.id}`} (Camera ${camera.id}) — ${camera.connected ? camera.availability : 'disconnected'}${camera.width ? ` — ${camera.width} × ${camera.height} @ ${camera.fps ? `${camera.fps} fps` : 'fps n/a'}` : ''}`,
   }))
 
   const filteredSideOptions = cameraOptions.filter((camera) => camera.id !== rearCameraId)
   const filteredRearOptions = cameraOptions.filter((camera) => camera.id !== sideCameraId)
 
-  const loadSavedConfig = async () => {
+  const loadSavedConfig = async (signal) => {
     try {
-      const response = await fetch(`${STATION_SERVICE_URL}/camera-config`)
+      const response = await fetch(`${STATION_SERVICE_URL}/camera-config`, { signal })
       if (!response.ok) {
         throw new Error('Saved station configuration could not be loaded.')
       }
@@ -265,12 +274,36 @@ export default function Cameras() {
       const config = await response.json()
       setSideCameraId(config.side_camera_id ?? null)
       setRearCameraId(config.rear_camera_id ?? null)
+      setCameras((previousCameras) => {
+        const knownIds = new Set(previousCameras.map((camera) => camera.id))
+        const configuredIds = [config.side_camera_id, config.rear_camera_id]
+          .filter((cameraId) => cameraId !== null && !knownIds.has(cameraId))
+        return [
+          ...previousCameras,
+          ...configuredIds.map((cameraId) => ({
+            id: cameraId,
+            name: `Camera ${cameraId}`,
+            width: null,
+            height: null,
+            fps: null,
+            connected: false,
+            availability: 'disconnected',
+          })),
+        ]
+      })
     } catch (loadError) {
-      setError(loadError.message || 'Saved station configuration could not be loaded.')
+      if (!signal?.aborted) {
+        setError(loadError.message || 'Saved station configuration could not be loaded.')
+      }
     }
   }
 
   const scanCameras = async () => {
+    const requestId = scanRequestIdRef.current + 1
+    scanRequestIdRef.current = requestId
+    scanControllerRef.current?.abort()
+    const controller = new AbortController()
+    scanControllerRef.current = controller
     setIsScanning(true)
     setError('')
     setSaveMessage('')
@@ -279,33 +312,67 @@ export default function Cameras() {
       await new Promise((resolve) => {
         window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))
       })
-      const response = await fetch(`${STATION_SERVICE_URL}/cameras`)
+      const response = await fetch(`${STATION_SERVICE_URL}/cameras`, { signal: controller.signal })
       if (!response.ok) {
         throw new Error('The station service is unavailable or returned an error.')
       }
 
       const payload = await response.json()
       const availableCameras = Array.isArray(payload.cameras) ? payload.cameras : []
-      setCameras(availableCameras)
-
-      if (!availableCameras.length) {
-        setError('')
-      }
+      setCameras((previousCameras) => {
+        const refreshedIds = new Set(availableCameras.map((camera) => camera.id))
+        const previousById = Object.fromEntries(previousCameras.map((camera) => [camera.id, camera]))
+        const refreshedCameras = availableCameras.map((camera) => {
+          const previous = previousById[camera.id]
+          if (!previous || camera.availability === 'available') return camera
+          return {
+            ...previous,
+            ...camera,
+            width: camera.width ?? previous.width,
+            height: camera.height ?? previous.height,
+            fps: camera.fps ?? previous.fps,
+          }
+        })
+        const omittedCameras = previousCameras
+          .filter((camera) => !refreshedIds.has(camera.id))
+          .map((camera) => ({
+            ...camera,
+            connected: false,
+            availability: 'disconnected',
+            width: null,
+            height: null,
+            fps: null,
+          }))
+        return [...refreshedCameras, ...omittedCameras]
+      })
+      setHasScanned(true)
     } catch (scanError) {
-      setCameras([])
-      setError(scanError.message || 'Could not reach the station service. Start the backend and try again.')
+      if (!controller.signal.aborted) {
+        setError(scanError.message || 'Could not reach the station service. Start the backend and try again.')
+      }
     } finally {
-      setIsScanning(false)
+      if (requestId === scanRequestIdRef.current) {
+        setIsScanning(false)
+        scanControllerRef.current = null
+      }
     }
   }
 
   useEffect(() => {
+    const controller = new AbortController()
+    let active = true
     const bootstrap = async () => {
-      await loadSavedConfig()
+      await loadSavedConfig(controller.signal)
+      if (!active) return
       await scanCameras()
     }
 
     bootstrap()
+    return () => {
+      active = false
+      controller.abort()
+      scanControllerRef.current?.abort()
+    }
   }, [])
 
   const saveConfig = async () => {
@@ -360,7 +427,7 @@ export default function Cameras() {
 
       {error ? <div className='notice' style={{ borderColor: '#f2c4c4', background: '#fff3f3', color: '#8a2f2f' }}>{error}</div> : null}
       {saveMessage ? <div className='notice'>{saveMessage}</div> : null}
-      {!isScanning && !cameras.length && !error ? (
+      {!isScanning && hasScanned && !cameras.some((camera) => camera.connected) && !error ? (
         <div className='notice'>No cameras were detected. Plug in a USB camera and use “Rescan Cameras” to check again.</div>
       ) : null}
       {duplicateSelection ? (
@@ -382,7 +449,7 @@ export default function Cameras() {
           resolution={sideResolution}
           fps={sideFps}
           isLoading={isScanning}
-          cameraDetected={Boolean(sideCamera)}
+          cameraDetected={Boolean(sideCamera?.connected)}
           emptyMessage={cameras.length === 0 ? 'No camera available for this view.' : ''}
         />
         <CameraCard
@@ -399,7 +466,7 @@ export default function Cameras() {
           resolution={rearResolution}
           fps={rearFps}
           isLoading={isScanning}
-          cameraDetected={Boolean(rearCamera)}
+          cameraDetected={Boolean(rearCamera?.connected)}
           emptyMessage={cameras.length === 0 ? 'No camera available for this view.' : ''}
         />
       </div>

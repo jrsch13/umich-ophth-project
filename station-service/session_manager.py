@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 import re
 import shutil
@@ -14,10 +15,11 @@ from typing import Any
 import cv2
 
 from camera_config import load_config
-from cameras import camera_lock, open_camera
+from cameras import camera_lock, camera_name, open_camera
 from recording import CameraRecorder
 
 SESSIONS_DIR = Path(__file__).resolve().parent / "sessions"
+logger = logging.getLogger(__name__)
 
 
 class SessionError(Exception):
@@ -101,10 +103,24 @@ class SessionManager:
                 for role, camera_id in configured:
                     lock = camera_lock(camera_id)
                     if not lock.acquire(blocking=False):
+                        logger.warning(
+                            "event=camera_lock_busy operation=record-open role=%s camera_id=%s name=%r thread=%s",
+                            role,
+                            camera_id,
+                            camera_name(camera_id),
+                            threading.current_thread().name,
+                        )
                         raise SessionError(
                             409,
                             f"The {role.title()} camera is busy. Leave the Cameras page and try again after its preview closes.",
                         )
+                    logger.info(
+                        "event=camera_lock_acquired operation=record-open role=%s camera_id=%s name=%r thread=%s",
+                        role,
+                        camera_id,
+                        camera_name(camera_id),
+                        threading.current_thread().name,
+                    )
 
                     resource = {
                         "role": role,
@@ -117,7 +133,7 @@ class SessionManager:
                     }
                     resources.append(resource)
 
-                    camera = open_camera(camera_id)
+                    camera = open_camera(camera_id, operation="record-open")
                     if camera is None:
                         raise SessionError(
                             503,
@@ -254,6 +270,12 @@ class SessionManager:
                         for item in resources
                     },
                 }
+                logger.info(
+                    "event=session_started session_id=%s selected_cameras=%s thread=%s",
+                    session_id,
+                    selected_cameras,
+                    threading.current_thread().name,
+                )
                 return {"status": "recording", "session_id": session_id}
             except SessionError:
                 self._cleanup_resources(resources)
@@ -314,6 +336,13 @@ class SessionManager:
                 save_error = error
             finally:
                 self._active_session = None
+                logger.info(
+                    "event=session_stopped session_id=%s duration_seconds=%.3f frame_counts=%s errors=%s",
+                    session["session_id"],
+                    duration_seconds,
+                    metadata["frame_counts"],
+                    errors,
+                )
 
             if save_error is not None:
                 raise SessionError(
