@@ -1,22 +1,22 @@
-# DeepLabCut model projects / weights
+# Videos / generated outputs
+*.MOV
+*.mov
+*.mp4
+*.avi
+
+openpose-pipeline/openpose/output/
+*_keypoints.json
+
+# Large pretrained weights
+*.caffemodel
+
+# Existing project outputs
 models/
-
-# Raw videos
-data/raw-videos/
-**/videos-raw/
-
-# Generated Anipose outputs
 **/pose-2d/
 **/pose-2d-filtered/
 **/pose-3d/
 **/videos-labeled/
 **/videos-labeled-filtered/
-
-# Video files
-*.MOV
-*.mov
-*.mp4
-*.avi
 
 # Python
 __pycache__/
@@ -44,3 +44,14 @@ pnpm-debug.log*
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# OpenPose local binary installation
+openpose-pipeline/openpose/
+
+# OpenPose generated outputs
+openpose-pipeline/output/
+
+# OpenPose generated keypoints / labeled videos
+**/*_keypoints.json
+**/*_labeled.avi
+**/*_labeled.mp4
