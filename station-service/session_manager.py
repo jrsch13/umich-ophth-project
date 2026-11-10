@@ -330,7 +330,13 @@ class SessionManager:
                 _write_json(session["session_dir"] / "metadata.json", metadata)
                 _write_json(
                     session["session_dir"] / "analysis_status.json",
-                    {"status": "pending"},
+                    {
+                        "status": "pending",
+                        "started_at": None,
+                        "completed_at": None,
+                        "error": None,
+                        "views": {},
+                    },
                 )
             except OSError as error:
                 save_error = error

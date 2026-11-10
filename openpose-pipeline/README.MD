@@ -6,15 +6,15 @@ After you have pulled this repo, you will need to install Openpose locally to yo
 
 From Windows PowerShell:
 ```powershell
-git clone <repository-url>
-cd umich-ophth-anipose
+git clone https://github.com/jrsch13/umich-ophth-project.git
+cd umich-ophth-project
 ```
 
 2. Install WSL2
 
 Open PowerShell as Administrator:
 ```powershell
-wsl --install -d Ubuntu-22.04
+wsl.exe --install Ubuntu-22.04
 wsl --update
 ```
 

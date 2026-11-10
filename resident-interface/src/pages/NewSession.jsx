@@ -53,6 +53,8 @@ export default function NewSession() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [sessionId, setSessionId] = useState('')
   const [sessionPath, setSessionPath] = useState('')
+  const [analysisStatus, setAnalysisStatus] = useState('pending')
+  const [analysisStatusError, setAnalysisStatusError] = useState(false)
   const [error, setError] = useState('')
 
   const detectedCameraIds = useMemo(
@@ -161,6 +163,33 @@ export default function NewSession() {
   }, [phase])
 
   useEffect(() => {
+    if (phase !== 'saved' || !sessionId || ['complete', 'failed'].includes(analysisStatus)) {
+      return undefined
+    }
+
+    let active = true
+    const refreshAnalysisStatus = async () => {
+      try {
+        const status = await stationRequest(
+          `/sessions/${encodeURIComponent(sessionId)}/analysis-status`,
+        )
+        if (!active) return
+        setAnalysisStatus(status.status)
+        setAnalysisStatusError(false)
+      } catch {
+        if (active) setAnalysisStatusError(true)
+      }
+    }
+
+    refreshAnalysisStatus()
+    const timer = window.setInterval(refreshAnalysisStatus, 3000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [analysisStatus, phase, sessionId])
+
+  useEffect(() => {
     if (phase !== 'recording') return undefined
     let active = true
     const refreshStatus = async () => {
@@ -194,6 +223,7 @@ export default function NewSession() {
       const result = await stationRequest('/sessions/stop', { method: 'POST' })
       setSessionId(result.session_id || sessionId)
       setSessionPath(result.session_path || '')
+      setAnalysisStatus(result.analysis_status?.status || 'pending')
       setPhase('saved')
     } catch (stopError) {
       try {
@@ -359,7 +389,15 @@ export default function NewSession() {
           {phase === 'saved' ? (
             <div style={{ textAlign: 'center', padding: '22px 0' }}>
               <StatusPill tone='success'>Session saved ✓</StatusPill>
-              <h3>Recording complete.</h3>
+              {analysisStatus === 'complete' ? <h3>Analysis complete ✓</h3> : null}
+              {analysisStatus === 'failed' ? <h3>Analysis needs attention.</h3> : null}
+              {analysisStatus !== 'complete' && analysisStatus !== 'failed' ? (
+                <>
+                  <h3>Analyzing posture data...</h3>
+                  <p className='muted'>You may leave the station.</p>
+                  {analysisStatusError ? <p className='muted small'>Analysis status could not be refreshed. The recording remains saved.</p> : null}
+                </>
+              ) : null}
               <p className='muted'>{sessionId}</p>
               {sessionPath ? <p className='muted small'>{sessionPath}</p> : null}
               <button className='button secondary' onClick={resetSession}>New session</button>

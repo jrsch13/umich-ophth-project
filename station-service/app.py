@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -10,7 +11,10 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from camera_config import load_config, save_config
 from cameras import detect_cameras, stream_camera_preview
+from openpose_runner import OpenPoseRunnerError, openpose_runner
 from session_manager import SessionError, session_manager
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -32,6 +36,11 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/openpose/status")
+def get_openpose_status() -> dict[str, Any]:
+    return openpose_runner.backend_status()
 
 
 @app.get("/cameras")
@@ -75,14 +84,39 @@ def start_session(request: SessionStartRequest) -> dict[str, Any]:
 @app.post("/sessions/stop")
 def stop_session() -> dict[str, Any]:
     try:
-        return session_manager.stop()
+        result = session_manager.stop()
     except SessionError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    try:
+        result["analysis_status"] = openpose_runner.start(result["session_id"])
+    except OpenPoseRunnerError as error:
+        logger.exception("Could not launch analysis for saved session=%s", result["session_id"])
+        result["analysis_status"] = openpose_runner.mark_start_failed(
+            result["session_id"],
+            "Analysis could not be started. Check the station service log.",
+        )
+    return result
 
 
 @app.get("/sessions/current")
 def get_current_session() -> dict[str, Any]:
     return session_manager.current()
+
+
+@app.get("/sessions/{session_id}/analysis-status")
+def get_analysis_status(session_id: str) -> dict[str, Any]:
+    try:
+        return openpose_runner.get_status(session_id)
+    except OpenPoseRunnerError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+@app.post("/sessions/{session_id}/analyze")
+def analyze_session(session_id: str) -> dict[str, Any]:
+    try:
+        return openpose_runner.start(session_id)
+    except OpenPoseRunnerError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 class CameraConfigUpdate(BaseModel):

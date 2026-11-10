@@ -4,6 +4,10 @@ param(
 
     [string]$Name,
 
+    [string]$OutputDir,
+
+    [string]$LabeledVideoPath,
+
     # Optional smoke test:
     # process frames 0 through FrameLast only.
     # Leave as -1 to process the full video.
@@ -76,9 +80,17 @@ $Name = $Name -replace '[<>:"/\\|?*]', '_'
 
 $PipelineRoot = $PSScriptRoot
 
-$OutputDir = Join-Path $PipelineRoot "output\$Name"
+if (-not $OutputDir) {
+    $OutputDir = Join-Path $PipelineRoot "output\$Name"
+}
+$OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $JsonDir = Join-Path $OutputDir "json"
-$LabeledVideo = Join-Path $OutputDir "labeled.avi"
+if ($LabeledVideoPath) {
+    $LabeledVideo = [System.IO.Path]::GetFullPath($LabeledVideoPath)
+}
+else {
+    $LabeledVideo = Join-Path $OutputDir "labeled.avi"
+}
 
 # WSL OpenPose installation
 $OpenPoseRootLinux = "~/openpose"
@@ -90,6 +102,10 @@ $ModelFolderLinux = "~/openpose/models/"
 # ------------------------------------------------------------
 
 New-Item -ItemType Directory -Force -Path $JsonDir | Out-Null
+if (-not $JsonOnly) {
+    $LabeledVideoParent = Split-Path -Parent $LabeledVideo
+    New-Item -ItemType Directory -Force -Path $LabeledVideoParent | Out-Null
+}
 
 # Remove old JSON files if this output name was used before.
 Get-ChildItem `
