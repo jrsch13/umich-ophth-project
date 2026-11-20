@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SectionHeader from '../components/SectionHeader'
 import StatusPill from '../components/StatusPill'
 
-const STATION_SERVICE_URL = 'http://127.0.0.1:8000'
+import { STATION_SERVICE_URL } from '../stationApi'
 const HEADER_SEPARATOR = new TextEncoder().encode('\r\n\r\n')
 
 function findBytes(haystack, needle, fromIndex = 0) {

@@ -1,11 +1,11 @@
 # Ergonomic Training Station — React UI Starter
 
-Visual placeholder only. No camera capture, OpenPose, authentication, database, or session-processing functionality is connected yet.
+The New Session and Session Analysis pages use the station service for recording and posture-analysis results.
 
 ## Tabs
 - Home
-- New
-- History
+- New Session
+- Session Analysis
 - Cameras
 
 ## Run
