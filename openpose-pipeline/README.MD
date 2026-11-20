@@ -1,24 +1,253 @@
-# This is where OpenPose Pipeline code will be ran on the resident training videos
+# OpenPose Pipeline
 
-After you have pulled this repo, you will need to install Openpose locally to your machine. Do NOT commit/push openpose files as github will reject them for being to large.
+This directory contains the OpenPose BODY_25 inference wrappers used by the ophthalmology ergonomic training project.
 
-1. Clone This Repository
+OpenPose itself is **not committed to this repository** because the binaries, dependencies, model weights, and generated outputs are large.
+
+After cloning the repository, each workstation must install an OpenPose runtime locally.
+
+Two supported project workflows currently exist:
+
+```text
+CPU workstation
+    ↓
+run_openpose_cpu.ps1
+    ↓
+native Windows OpenPose CPU build
+
+NVIDIA GPU workstation
+    ↓
+run_openpose_wsl.ps1
+    ↓
+WSL2 + CUDA + source-built OpenPose
+```
+
+Both wrappers produce the same output format so downstream session-analysis code does not need to care which backend was used.
+
+---
+
+# Repository Layout
+
+Expected structure:
+
+```text
+openpose-pipeline/
+├── README.MD
+├── run_openpose_cpu.ps1
+├── run_openpose_wsl.ps1
+├── run_openpose.ps1
+│
+├── openpose/              # local Windows CPU install; gitignored
+│   ├── bin/
+│   └── models/
+│
+└── output/                # generated test output; gitignored
+```
+
+The `openpose/` directory is only required for the native Windows CPU workflow.
+
+The WSL GPU workflow installs OpenPose separately inside Linux at:
+
+```text
+~/openpose
+```
+
+---
+
+# Which Backend Should I Use?
+
+## CPU
+
+Use:
+
+```text
+run_openpose_cpu.ps1
+```
+
+when:
+
+- the machine does not have a compatible NVIDIA GPU;
+- you want the simplest Windows setup;
+- you are testing application integration;
+- processing speed is not critical.
+
+CPU OpenPose can be very slow.
+
+---
+
+## NVIDIA GPU
+
+Use:
+
+```text
+run_openpose_wsl.ps1
+```
+
+when:
+
+- the workstation has a supported NVIDIA GPU;
+- WSL2 GPU passthrough is available;
+- OpenPose has been compiled for that GPU architecture.
+
+This is the preferred high-performance workflow for the resident training station.
+
+---
+
+# Clone the Repository
 
 From Windows PowerShell:
+
 ```powershell
 git clone https://github.com/jrsch13/umich-ophth-project.git
 cd umich-ophth-project
 ```
 
-2. Install WSL2
+---
+
+# CPU Setup
+
+## 1. Download the Windows CPU OpenPose Build
+
+Download the OpenPose v1.7.0 Windows CPU portable package.
+
+The package name is similar to:
+
+```text
+openpose-1.7.0-binaries-win64-cpu-python3.7-flir-3d.zip
+```
+
+Extract the contents so this executable exists:
+
+```text
+openpose-pipeline/
+└── openpose/
+    └── bin/
+        └── OpenPoseDemo.exe
+```
+
+Verify from the repository root:
+
+```powershell
+Test-Path ".\openpose-pipeline\openpose\bin\OpenPoseDemo.exe"
+```
+
+Expected:
+
+```text
+True
+```
+
+---
+
+## 2. Install BODY_25 Model Files
+
+The CPU build requires BODY_25 model files under:
+
+```text
+openpose-pipeline/
+└── openpose/
+    └── models/
+        └── pose/
+            └── body_25/
+                ├── pose_deploy.prototxt
+                └── pose_iter_584000.caffemodel
+```
+
+Verify:
+
+```powershell
+Test-Path ".\openpose-pipeline\openpose\models\pose\body_25\pose_deploy.prototxt"
+
+Test-Path ".\openpose-pipeline\openpose\models\pose\body_25\pose_iter_584000.caffemodel"
+```
+
+Both should return:
+
+```text
+True
+```
+
+The model weights are not committed to Git.
+
+If the bundled OpenPose model downloader fails, copy the BODY_25 files from a known working OpenPose installation or another approved project source.
+
+---
+
+# Test the CPU Pipeline
+
+From the repository root:
+
+```powershell
+.\openpose-pipeline\run_openpose_cpu.ps1 `
+  -Video "C:\path\to\video.mp4" `
+  -FrameLast 100
+```
+
+`-FrameLast 100` processes frames 0 through 100 and is strongly recommended for the first test because CPU inference is slow.
+
+Example:
+
+```powershell
+.\openpose-pipeline\run_openpose_cpu.ps1 `
+  -Video "C:\Users\YourName\Downloads\Side_shortened.mp4" `
+  -FrameLast 100
+```
+
+Expected output:
+
+```text
+openpose-pipeline/
+└── output/
+    └── Side_shortened/
+        ├── labeled.avi
+        └── json/
+            ├── ..._000000000000_keypoints.json
+            ├── ..._000000000001_keypoints.json
+            └── ...
+```
+
+If approximately 101 JSON files are created and `labeled.avi` shows the BODY_25 skeleton overlay, the CPU pipeline is working.
+
+---
+
+# NVIDIA GPU / WSL Setup
+
+The tested GPU workflow uses:
+
+```text
+Windows
++
+WSL2
++
+Ubuntu 22.04
++
+NVIDIA Windows driver
++
+CUDA Toolkit inside WSL
++
+OpenPose compiled from source
+```
+
+The development GPU workstation uses an RTX 5070.
+
+---
+
+# 1. Install WSL2
 
 Open PowerShell as Administrator:
+
 ```powershell
-wsl.exe --install Ubuntu-22.04
+wsl.exe --install -d Ubuntu-22.04
 wsl --update
 ```
 
 Restart Windows if requested.
+
+Confirm the distribution is using WSL2:
+
+```powershell
+wsl -l -v
+```
 
 Launch Ubuntu:
 
@@ -26,53 +255,70 @@ Launch Ubuntu:
 wsl
 ```
 
-Verify that the NVIDIA GPU is visible:
+---
 
-```powershell
+# 2. Verify NVIDIA GPU Access
+
+Inside WSL:
+
+```bash
 nvidia-smi
 ```
 
 You should see the installed NVIDIA GPU.
 
-If nvidia-smi does not show the GPU, stop here and fix WSL/NVIDIA GPU support before building OpenPose.
+If `nvidia-smi` does not work, stop here and fix Windows NVIDIA driver / WSL GPU access before continuing.
 
-Do not install a separate Linux NVIDIA display driver inside WSL. WSL uses the NVIDIA Windows driver.
+Do not install a separate Linux NVIDIA display driver inside WSL.
 
-3. Install CUDA Toolkit Inside WSL
+---
 
-The project has been tested using CUDA 12.8 for the WSL OpenPose build.
+# 3. Install CUDA Toolkit Inside WSL
 
-Inside WSL
+The RTX 5070 setup has been tested using CUDA 12.8.
 
-```powershell
+Inside WSL:
+
+```bash
 wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
+
 sudo dpkg -i cuda-keyring_1.1-1_all.deb
+
 sudo apt update
+
 sudo apt install -y cuda-toolkit-12-8
 ```
 
 Add CUDA to the shell environment:
 
-```powershell
+```bash
 echo 'export PATH=/usr/local/cuda-12.8/bin:$PATH' >> ~/.bashrc
 echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+
 source ~/.bashrc
 ```
+
 Verify:
-```powershell
+
+```bash
 nvcc --version
 ```
-Also verify GPU visibility again:
 
-```powershell
+and:
+
+```bash
 nvidia-smi
 ```
-4. Install OpenPose Build Dependencies
 
-Inside WSL
+---
 
-```powershell
+# 4. Install OpenPose Build Dependencies
+
+Inside WSL:
+
+```bash
 sudo apt update
+
 sudo apt install -y \
   build-essential \
   cmake \
@@ -90,78 +336,93 @@ sudo apt install -y \
   libsnappy-dev \
   liblmdb-dev
 ```
-Verify CMake:
-```powershell
+
+Verify:
+
+```bash
 cmake --version
 ```
-5. Clone OpenPose Inside WSL
 
-Inside WSL
+---
 
-```powershell
+# 5. Clone OpenPose Inside WSL
+
+```bash
 cd ~
+
 git clone https://github.com/CMU-Perceptual-Computing-Lab/openpose.git
+
 cd openpose
+
 git submodule update --init --recursive --remote
 ```
 
-The OpenPose source should now be located at ~/openpose
+The expected source location is:
 
-6. Install BODY_25 Model Files
+```text
+~/openpose
+```
 
-OpenPose requires the BODY_25 model.
+---
 
-The required model directory is:
+# 6. Install BODY_25 Model Files
 
+The WSL OpenPose build expects:
+
+```text
 ~/openpose/models/pose/body_25/
+```
 
-At minimum, verify that this directory contains:
+containing:
 
+```text
 pose_deploy.prototxt
 pose_iter_584000.caffemodel
-*You may need to download these files by searching 'file name' download in google, and then clicking the first link that pops up and downloading them individually.
+```
 
 Create the directory if necessary:
 
-```powershell
+```bash
 mkdir -p ~/openpose/models/pose/body_25
 ```
 
-The .caffemodel weights are not committed to this repository because they are large files.
+If BODY_25 is already installed in the Windows CPU OpenPose directory, copy it into WSL.
 
-If an existing working OpenPose installation is available on Windows, the BODY_25 files can be copied into WSL.
+Example:
 
-For example:
-
-```powershell
+```bash
 cp -r \
-  /mnt/c/Users/<WINDOWS_USERNAME>/Documents/umich-ophth-anipose/openpose-pipeline/openpose/models/pose/body_25/* \
+  "/mnt/c/Users/<WINDOWS_USERNAME>/Documents/umich-ophth-project/openpose-pipeline/openpose/models/pose/body_25/"* \
   ~/openpose/models/pose/body_25/
 ```
+
 Verify:
 
-```powershell
+```bash
 ls -lh ~/openpose/models/pose/body_25/
 ```
 
-7. Build OpenPose for the GPU
+---
 
-Create a clean build directory (still in WSL):
+# 7. Build OpenPose for the NVIDIA GPU
 
-```powershell
+Create a clean build directory:
+
+```bash
 cd ~/openpose
+
 rm -rf build
 mkdir build
 cd build
 ```
 
-RTX 5070 / Blackwell Configuration
+## RTX 5070
 
-The RTX 5070 uses CUDA compute capability 12.0 (sm_120).
+The RTX 5070 uses compute capability 12.0 / `sm_120`.
 
-Configure OpenPose with this in WSL:
+Configure:
 
-```powershell
+```bash
 cmake .. \
   -DGPU_MODE=CUDA \
   -DUSE_CUDNN=OFF \
@@ -174,204 +435,343 @@ cmake .. \
   -DCMAKE_BUILD_TYPE=Release
 ```
 
-If configuring another NVIDIA GPU, the CUDA architecture may need to be changed to match that GPU. Use ChatGPT to generate a cmake command for you
+Do **not** blindly use architecture `120` for another NVIDIA GPU.
 
-Do not blindly use 120 for every GPU.
+Other GPUs may require a different CUDA architecture value.
 
-After CMake succeeds, build OpenPose:
+Build:
 
-```powershell
+```bash
 make -j$(nproc)
 ```
 
-Verify the resulting executable:
+Verify:
 
-```powershell
+```bash
 ls ~/openpose/build/examples/openpose/openpose.bin
 ```
-The expected executable is:
 
-```powershell
+Expected:
+
+```text
 ~/openpose/build/examples/openpose/openpose.bin
 ```
 
-8. Test OpenPose Directly in WSL
+---
 
-Before using the PowerShell wrapper, it is useful to confirm that OpenPose itself works.
+# Test OpenPose Directly in WSL
 
-For example:
+This is optional but useful before testing the Windows wrapper.
 
-```powershell
+Create an output directory first:
+
+```bash
+mkdir -p \
+  "/mnt/c/Users/<WINDOWS_USERNAME>/Documents/umich-ophth-project/openpose-pipeline/output/test/json"
+```
+
+Then:
+
+```bash
 cd ~/openpose
+
 ./build/examples/openpose/openpose.bin \
   --video "/mnt/c/Users/<WINDOWS_USERNAME>/Downloads/test_video.mp4" \
   --model_pose BODY_25 \
   --model_folder "$HOME/openpose/models/" \
   --number_people_max 1 \
   --frame_last 100 \
-  --write_json "/mnt/c/Users/<WINDOWS_USERNAME>/Documents/umich-ophth-anipose/openpose-pipeline/output/test/json" \
+  --write_json "/mnt/c/Users/<WINDOWS_USERNAME>/Documents/umich-ophth-project/openpose-pipeline/output/test/json" \
   --display 0 \
   --render_pose 0
 ```
 
-If successful, 101 JSON files should be created.
+If successful, approximately 101 JSON files should be generated.
 
-9. Recommended Usage: PowerShell Wrapper
+---
 
-Normal users should not need to manually run the long WSL command.
+# Test the WSL GPU PowerShell Wrapper
 
-From the root of the cloned repository BACK IN REGULAR WINDOWS TERMINAL:
-
-```powershell
-.\openpose-pipeline\run_openpose.ps1 `
-  -Video "C:\path\to\video.mp4"
-```
-
-For example:
-
-```powershell
-.\openpose-pipeline\run_openpose.ps1 `
-  -Video "C:\Users\jrsch\Downloads\Side_shortened.mp4"
-```
-
-The script automatically:
-
-resolves the Windows video path, converts it to a WSL path, launches the WSL OpenPose executable, uses BODY_25, runs GPU inference, writes JSON keypoints, writes a labeled skeleton-overlay video.
-
-Process Only the First 101 Frames
-
-For a quick pipeline test:
-
-```powershell
-.\openpose-pipeline\run_openpose.ps1 `
-  -Video "C:\Users\jrsch\Downloads\Side_shortened.mp4" `
-  -FrameLast 100
-```
-
-FrameLast 100 processes frames 0 through 100. To choose another name:
-
-```powershell
-.\openpose-pipeline\run_openpose.ps1 `
-  -Video "C:\Users\jrsch\Downloads\Side_shortened.mp4" `
-  -Name "resident01_side"
-```
-
-This produces:
-
-openpose-pipeline/
-└── output/
-    └── resident01_side/
-
-JSON-Only Mode
-
-For automated analysis, the labeled video may not be necessary.
+Return to normal Windows PowerShell in the repository root.
 
 Run:
 
 ```powershell
-.\openpose-pipeline\run_openpose.ps1 `
-  -Video "C:\Users\jrsch\Downloads\Side_shortened.mp4" `
-  -JsonOnly
+.\openpose-pipeline\run_openpose_wsl.ps1 `
+  -Video "C:\path\to\video.mp4" `
+  -FrameLast 100
 ```
 
-This disables skeleton rendering and produces only the keypoint JSON files.
+Example:
 
-This will likely be the preferred mode when OpenPose is eventually launched automatically by the resident interface.
-
-Labeled Overlay Video
-
-Without -JsonOnly, the script creates:
-
-labeled.avi
-
-This contains the original video with the BODY_25 skeleton rendered on top.
-
-This is useful for:
-
-visual quality control;
-
-confirming keypoint tracking;
-
-evaluating camera placement;
-
-identifying occlusion problems;
-
-debugging incorrect posture measurements.
-
-Output
-
-A normal run produces:
-
-openpose-pipeline/
-└── output/
-    └── <video-name>/
-        ├── labeled.avi
-        └── json/
-            ├── ..._000000000000_keypoints.json
-            ├── ..._000000000001_keypoints.json
-            └── ...
-
-The output directory is ignored by Git.
-
-Do not commit:
-
-raw videos;
-
-generated keypoint JSON;
-
-labeled videos;
-
-OpenPose binaries;
-
-BODY_25 model weights.
-
-PowerShell Execution Policy
-
-If Windows blocks the .ps1 script, temporarily allow local PowerShell scripts for the current terminal:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-```
-
-# Run OpenPose via the .ps1 file:
-
-I've had success running OpenPose through WSL
 ```powershell
 .\openpose-pipeline\run_openpose_wsl.ps1 `
-  -Video "path to video" `
-  -Name "name of test"
-  -FrameLast X
+  -Video "C:\Users\YourName\Downloads\Side_shortened.mp4" `
+  -FrameLast 100
 ```
 
-This version might not work but keeping it here for now:
+This automatically:
+
+1. resolves the Windows input path;
+2. converts Windows paths to WSL paths;
+3. launches `~/openpose/build/examples/openpose/openpose.bin`;
+4. runs BODY_25;
+5. uses the WSL CUDA build;
+6. writes JSON keypoints back to Windows;
+7. writes a labeled skeleton-overlay video.
+
+Expected output:
+
+```text
+openpose-pipeline/
+└── output/
+    └── Side_shortened/
+        ├── labeled.avi
+        └── json/
+            ├── ..._keypoints.json
+            └── ...
+```
+
+---
+
+# Full Video Processing
+
+Once a 100-frame test succeeds, remove `-FrameLast`.
+
+CPU:
+
 ```powershell
-.\openpose-pipeline\run_openpose.ps1 `
-  -Video ".\data\raw-videos\resident01_side.MOV" `
+.\openpose-pipeline\run_openpose_cpu.ps1 `
+  -Video "C:\path\to\video.mp4"
+```
+
+GPU:
+
+```powershell
+.\openpose-pipeline\run_openpose_wsl.ps1 `
+  -Video "C:\path\to\video.mp4"
+```
+
+---
+
+# Choose an Output Name
+
+Both wrappers support:
+
+```text
+-Name
+```
+
+Example:
+
+```powershell
+.\openpose-pipeline\run_openpose_wsl.ps1 `
+  -Video "C:\path\to\video.mp4" `
   -Name "resident01_side"
 ```
 
-## You might need to run this below to allow your terminal to run local scripts:
+This produces:
+
+```text
+openpose-pipeline/
+└── output/
+    └── resident01_side/
+```
+
+---
+
+# JSON-Only Mode
+
+Both wrappers support:
+
+```text
+-JsonOnly
+```
+
+CPU:
+
+```powershell
+.\openpose-pipeline\run_openpose_cpu.ps1 `
+  -Video "C:\path\to\video.mp4" `
+  -JsonOnly
+```
+
+GPU:
+
+```powershell
+.\openpose-pipeline\run_openpose_wsl.ps1 `
+  -Video "C:\path\to\video.mp4" `
+  -JsonOnly
+```
+
+This skips labeled-video rendering and only generates BODY_25 JSON.
+
+---
+
+# Custom Session Output
+
+Both wrappers also support:
+
+```text
+-OutputDir
+-LabeledVideoPath
+```
+
+These parameters are used by the resident-interface station service.
+
+Example:
+
+```powershell
+.\openpose-pipeline\run_openpose_cpu.ps1 `
+  -Video ".\station-service\sessions\dummy_test\raw\side.mp4" `
+  -OutputDir ".\station-service\sessions\dummy_test\openpose\side" `
+  -LabeledVideoPath ".\station-service\sessions\dummy_test\labeled-videos\side_labeled.avi"
+```
+
+The same parameters work with:
+
+```text
+run_openpose_wsl.ps1
+```
+
+This allows CPU and GPU workstations to produce the same session directory structure.
+
+---
+
+# Labeled Overlay Video
+
+Unless `-JsonOnly` is used, the wrappers create a labeled AVI containing the BODY_25 skeleton overlay.
+
+Example:
+
+```text
+labeled.avi
+```
+
+For resident sessions:
+
+```text
+station-service/
+└── sessions/
+    └── <session_id>/
+        └── labeled-videos/
+            ├── side_labeled.avi
+            └── rear_labeled.avi
+```
+
+These videos are useful for visual quality control.
+
+---
+
+# PowerShell Execution Policy
+
+If PowerShell blocks a `.ps1` file:
+
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 ```
 
-# To run OpenPose manually via the terminal, run:
+Then rerun the desired wrapper.
+
+This only changes the policy for the current PowerShell process.
+
+---
+
+# Generated Files and Git
+
+Do not commit:
+
+- the local `openpose/` installation;
+- BODY_25 model weights;
+- raw training videos;
+- generated JSON keypoints;
+- labeled videos;
+- session analysis output.
+
+These files should remain covered by `.gitignore`.
+
+---
+
+# Troubleshooting
+
+## CPU executable not found
+
+Check:
+
 ```powershell
-.\openpose-pipeline\openpose\bin\OpenPoseDemo.exe `
-  --video ".\data\raw-videos\side_profile_test.MOV" `
-  --model_pose BODY_25 `
-  --number_people_max 1 `
-  --write_json ".\openpose-pipeline\output\side_profile_test\json" `
-  --write_video ".\openpose-pipeline\output\side_profile_test\labeled.avi" `
-  --display 0
+Test-Path ".\openpose-pipeline\openpose\bin\OpenPoseDemo.exe"
 ```
 
-This produces:
-openpose-pipeline/
-└── output/
-    └── side_profile_test/
-        ├── labeled.avi
-        └── json/
-            ├── ..._000000000000_keypoints.json
-            ├── ..._000000000001_keypoints.json
-            └── ...
+If `False`, install/extract the Windows CPU OpenPose package into:
+
+```text
+openpose-pipeline/openpose/
+```
+
+---
+
+## BODY_25 model not found
+
+CPU:
+
+```powershell
+Test-Path ".\openpose-pipeline\openpose\models\pose\body_25\pose_iter_584000.caffemodel"
+```
+
+GPU/WSL:
+
+```bash
+ls ~/openpose/models/pose/body_25/
+```
+
+---
+
+## WSL OpenPose executable not found
+
+Verify:
+
+```bash
+ls ~/openpose/build/examples/openpose/openpose.bin
+```
+
+---
+
+## NVIDIA GPU is not visible inside WSL
+
+Inside WSL:
+
+```bash
+nvidia-smi
+```
+
+If the NVIDIA GPU is not visible, fix Windows NVIDIA driver / WSL2 GPU support before troubleshooting OpenPose.
+
+---
+
+## `no kernel image is available for execution on the device`
+
+The CUDA build was not compiled for that GPU architecture.
+
+Rebuild OpenPose/Caffe with the appropriate CUDA architecture for that NVIDIA GPU.
+
+---
+
+# Current Project Backends
+
+The station-service can use either backend:
+
+```text
+OPENPOSE_BACKEND=cpu
+```
+
+or:
+
+```text
+OPENPOSE_BACKEND=wsl
+```
+
+CPU is the compatibility/development path.
+
+WSL + CUDA is the preferred high-performance NVIDIA deployment path.
+
+The resident does not choose the backend. It is configured once for each workstation.
