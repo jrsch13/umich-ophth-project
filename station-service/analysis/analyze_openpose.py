@@ -4,16 +4,21 @@ import argparse
 import json
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from openpose_io import load_openpose_json_dir, torso_confidence_summary
-from posture_metrics import (
-    DEFAULT_THRESHOLDS,
-    classify_frames,
-    compute_metrics,
-)
+if __package__:
+    from .openpose_io import load_openpose_json_dir, torso_confidence_summary
+    from .posture_metrics import DEFAULT_NEUTRAL_SECONDS, DEFAULT_THRESHOLDS, classify_frames, compute_metrics
+else:
+    from openpose_io import load_openpose_json_dir, torso_confidence_summary
+    from posture_metrics import DEFAULT_NEUTRAL_SECONDS, DEFAULT_THRESHOLDS, classify_frames, compute_metrics
+
+
+DEFAULT_FPS = 30.0
 
 
 def _metric_stats(
@@ -207,8 +212,8 @@ def parse_args() -> argparse.Namespace:
             "all = reproduce all notebook metrics."
         ),
     )
-    parser.add_argument("--fps", type=float, default=30.0)
-    parser.add_argument("--neutral-seconds", type=float, default=10.0)
+    parser.add_argument("--fps", type=float, default=DEFAULT_FPS)
+    parser.add_argument("--neutral-seconds", type=float, default=DEFAULT_NEUTRAL_SECONDS)
     parser.add_argument("--timestamps-csv")
     parser.add_argument(
         "--min-confidence",
@@ -242,31 +247,36 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    output = Path(args.output_dir)
+def analyze_openpose(
+    json_dir: str | Path,
+    output_dir: str | Path,
+    *,
+    view: str,
+    fps: float = DEFAULT_FPS,
+    neutral_seconds: float = DEFAULT_NEUTRAL_SECONDS,
+    timestamps_csv: str | Path | None = None,
+    min_confidence: float = 0.0,
+    thresholds: dict[str, float] | None = None,
+) -> dict:
+    """Analyze existing BODY_25 frames and write CSV, summary, and plots."""
+    output = Path(output_dir)
     plots = output / "plots"
     output.mkdir(parents=True, exist_ok=True)
     plots.mkdir(parents=True, exist_ok=True)
 
-    thresholds = {
-        "Shoulder_Hiking": args.shoulder_threshold,
-        "Neck_Flexion_Extension": args.neck_threshold,
-        "Trunk_Leaning": args.trunk_lean_threshold,
-        "Trunk_Flexion_Extension": args.trunk_flex_threshold,
-    }
+    thresholds = dict(DEFAULT_THRESHOLDS) if thresholds is None else dict(thresholds)
 
     df = load_openpose_json_dir(
-        args.json_dir,
-        fps=args.fps,
-        timestamps_csv=args.timestamps_csv,
-        min_confidence=args.min_confidence,
+        json_dir,
+        fps=fps,
+        timestamps_csv=timestamps_csv,
+        min_confidence=min_confidence,
     )
 
     metrics, baselines = compute_metrics(
         df,
-        view=args.view,
-        neutral_seconds=args.neutral_seconds,
+        view=view,
+        neutral_seconds=neutral_seconds,
     )
     metrics = classify_frames(metrics, thresholds=thresholds)
 
@@ -277,10 +287,10 @@ def main() -> None:
 
     summary = build_summary(
         metrics,
-        view=args.view,
+        view=view,
         baselines=baselines.to_dict(),
         thresholds=thresholds,
-        neutral_seconds=args.neutral_seconds,
+        neutral_seconds=neutral_seconds,
     )
     with (output / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, allow_nan=False)
@@ -358,6 +368,28 @@ def main() -> None:
             thresholds=[thresholds["Shoulder_Hiking"] * 100],
         )
 
+    return summary
+
+
+def main() -> None:
+    args = parse_args()
+    output = Path(args.output_dir)
+    analyze_openpose(
+        args.json_dir,
+        output,
+        view=args.view,
+        fps=args.fps,
+        neutral_seconds=args.neutral_seconds,
+        timestamps_csv=args.timestamps_csv,
+        min_confidence=args.min_confidence,
+        thresholds={
+            "Shoulder_Hiking": args.shoulder_threshold,
+            "Neck_Flexion_Extension": args.neck_threshold,
+            "Trunk_Leaning": args.trunk_lean_threshold,
+            "Trunk_Flexion_Extension": args.trunk_flex_threshold,
+        },
+    )
+    plots = output / "plots"
     print(f"Analysis complete: {output}")
     print(f"Metrics CSV: {output / 'posture_metrics.csv'}")
     print(f"Summary JSON: {output / 'summary.json'}")

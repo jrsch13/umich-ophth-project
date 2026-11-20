@@ -332,10 +332,19 @@ class SessionManager:
                     session["session_dir"] / "analysis_status.json",
                     {
                         "status": "pending",
+                        "stage": None,
                         "started_at": None,
                         "completed_at": None,
                         "error": None,
-                        "views": {},
+                        "views": {
+                            recorder.role: {
+                                "status": "pending",
+                                "openpose_status": "pending",
+                                "posture_status": "pending",
+                            }
+                            for recorder in recorders
+                            if (session["session_dir"] / "raw" / f"{recorder.role}.mp4").is_file()
+                        },
                     },
                 )
             except OSError as error:

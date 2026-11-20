@@ -12,6 +12,7 @@ DEFAULT_THRESHOLDS = {
     "Trunk_Leaning": 5.0,                # degrees
     "Trunk_Flexion_Extension": 5.0,      # degrees
 }
+DEFAULT_NEUTRAL_SECONDS = 10.0
 
 
 @dataclass
@@ -188,7 +189,7 @@ def compute_metrics(
     df: pd.DataFrame,
     *,
     view: str,
-    neutral_seconds: float = 10.0,
+    neutral_seconds: float = DEFAULT_NEUTRAL_SECONDS,
 ) -> tuple[pd.DataFrame, Baselines]:
     """Compute notebook-derived posture metrics.
 

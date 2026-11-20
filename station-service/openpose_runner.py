@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from posture_analysis_runner import run_posture_analysis
+
 
 logger = logging.getLogger(__name__)
 STATION_DIR = Path(__file__).resolve().parent
@@ -97,7 +99,10 @@ class OpenPoseRunner:
                     "started_at": None,
                     "completed_at": None,
                     "error": None,
-                    "views": {},
+                    "views": {
+                        view: {"status": "pending", "openpose_status": "pending", "posture_status": "pending"}
+                        for view in VIEWS if (session_dir / "raw" / f"{view}.mp4").is_file()
+                    },
                 }
             try:
                 with status_path.open(encoding="utf-8") as handle:
@@ -111,6 +116,26 @@ class OpenPoseRunner:
                 "failed",
             }:
                 raise OpenPoseRunnerError(500, "The session analysis status file is invalid.")
+            if not isinstance(status.get("views"), dict):
+                raise OpenPoseRunnerError(500, "The session analysis status file is invalid.")
+            if status["status"] == "pending":
+                for view in VIEWS:
+                    if (session_dir / "raw" / f"{view}.mp4").is_file():
+                        status["views"].setdefault(view, {"status": "pending"})
+            for view_status in status.get("views", {}).values():
+                if "openpose_status" not in view_status:
+                    view_status["openpose_status"] = view_status.get("status", "pending")
+                if "posture_status" not in view_status:
+                    view_status["posture_status"] = (
+                        "complete" if view_status.get("analysis_dir") else "pending"
+                    )
+                if view_status["openpose_status"] == "complete" and view_status["posture_status"] == "pending":
+                    view_status["status"] = "pending"
+            if status["status"] == "complete" and any(
+                item["posture_status"] != "complete" for item in status["views"].values()
+            ):
+                status["status"] = "pending"
+                status["stage"] = "posture_analysis"
             return status
 
     def start(self, session_id: str) -> dict[str, Any]:
@@ -148,12 +173,13 @@ class OpenPoseRunner:
                 raise OpenPoseRunnerError(409, "Analysis is already complete for this session.")
 
             existing_views = {
-                view: {"status": "pending"}
+                view: {"status": "pending", "openpose_status": "pending", "posture_status": "pending"}
                 for view in VIEWS
                 if (session_dir / "raw" / f"{view}.mp4").is_file()
             }
             started_status: dict[str, Any] = {
                 "status": "processing",
+                "stage": "openpose",
                 "backend": backend,
                 "started_at": _timestamp(),
                 "completed_at": None,
@@ -174,6 +200,7 @@ class OpenPoseRunner:
                 self._jobs.discard(session_id)
                 started_status.update({
                     "status": "failed",
+                    "stage": None,
                     "completed_at": _timestamp(),
                     "error": "Could not start the analysis worker. See the session logs.",
                 })
@@ -196,6 +223,8 @@ class OpenPoseRunner:
                 log_relative = f"logs/openpose_{view}.log"
                 status["views"][view]["log"] = log_relative
                 status["views"][view]["status"] = "processing"
+                status["views"][view]["openpose_status"] = "processing"
+                status["stage"] = "openpose"
                 self._save_status(session_dir, status)
                 try:
                     result = self._run_view(
@@ -206,16 +235,30 @@ class OpenPoseRunner:
                         wrapper_path,
                     )
                     status["views"][view].update(result)
-                    status["views"][view]["status"] = "complete"
+                    status["views"][view]["openpose_status"] = "complete"
+                    status["views"][view]["posture_status"] = "processing"
+                    status["stage"] = "posture_analysis"
+                    self._save_status(session_dir, status)
+                    try:
+                        status["views"][view].update(run_posture_analysis(session_dir, view))
+                        status["views"][view]["posture_status"] = "complete"
+                        status["views"][view]["status"] = "complete"
+                    except Exception as error:
+                        summary = f"{view.title()} posture analysis failed: {error}"
+                        logger.exception("Posture analysis failed for session=%s view=%s", session_id, view)
+                        status["views"][view].update({
+                            "status": "failed", "posture_status": "failed", "error": summary,
+                        })
+                        failures.append(summary)
                 except (OSError, RuntimeError, subprocess.SubprocessError) as error:
                     summary = f"{view.title()} analysis failed. See {log_relative}."
                     logger.exception("OpenPose failed for session=%s view=%s", session_id, view)
-                    status["views"][view].update({"status": "failed", "error": summary, "log": log_relative})
+                    status["views"][view].update({"status": "failed", "openpose_status": "failed", "error": summary, "log": log_relative})
                     failures.append(summary)
                 except Exception:
                     summary = f"{view.title()} analysis failed. See {log_relative}."
                     logger.exception("Unexpected OpenPose failure for session=%s view=%s", session_id, view)
-                    status["views"][view].update({"status": "failed", "error": summary, "log": log_relative})
+                    status["views"][view].update({"status": "failed", "openpose_status": "failed", "error": summary, "log": log_relative})
                     failures.append(summary)
                 self._save_status(session_dir, status)
 
@@ -223,6 +266,7 @@ class OpenPoseRunner:
                 failures.append("No raw Side or Rear video was found.")
             status.update({
                 "status": "failed" if failures else "complete",
+                "stage": None,
                 "completed_at": _timestamp(),
                 "error": "; ".join(failures) if failures else None,
             })
@@ -233,6 +277,7 @@ class OpenPoseRunner:
             logger.exception("Could not finalize OpenPose status for session=%s", session_id)
             status.update({
                 "status": "failed",
+                "stage": None,
                 "completed_at": _timestamp(),
                 "error": "Analysis could not be finalized. Check the station service log.",
             })
@@ -320,6 +365,7 @@ class OpenPoseRunner:
             status = self.get_status(session_id)
             status.update({
                 "status": "failed",
+                "stage": None,
                 "backend": os.environ.get("OPENPOSE_BACKEND", "cpu").strip().lower(),
                 "completed_at": _timestamp(),
                 "error": summary,
@@ -335,6 +381,77 @@ class OpenPoseRunner:
                 "error": summary,
                 "views": {},
             }
+
+    def retry_posture(self, session_id: str, view: str) -> dict[str, Any]:
+        if view not in VIEWS:
+            raise OpenPoseRunnerError(404, "View not found.")
+        session_dir = self._session_dir(session_id)
+        if not session_dir.is_dir():
+            raise OpenPoseRunnerError(404, "Session not found.")
+        json_dir = session_dir / "openpose" / view / "json"
+        if not json_dir.is_dir() or not any(json_dir.glob("*_keypoints.json")):
+            raise OpenPoseRunnerError(409, f"No OpenPose BODY_25 JSON frames found for {view}.")
+        with self._guard:
+            if session_id in self._jobs:
+                raise OpenPoseRunnerError(409, "Analysis is already processing for this session.")
+            status = self.get_status(session_id)
+            view_status = status.setdefault("views", {}).setdefault(view, {})
+            for key in ("analysis_dir", "summary", "plots"):
+                view_status.pop(key, None)
+            view_status.update({
+                "status": "processing", "openpose_status": "complete",
+                "posture_status": "processing", "json_frame_count": sum(1 for _ in json_dir.glob("*_keypoints.json")),
+                "error": None,
+            })
+            labeled = session_dir / "labeled-videos" / f"{view}_labeled.avi"
+            if labeled.is_file() and labeled.stat().st_size:
+                view_status["labeled_video"] = f"labeled-videos/{view}_labeled.avi"
+            status.update({"status": "processing", "stage": "posture_analysis", "completed_at": None, "error": None})
+            self._save_status(session_dir, status)
+            self._jobs.add(session_id)
+            worker = threading.Thread(
+                target=self._retry_posture_worker,
+                args=(session_id, session_dir, view, status),
+                name=f"posture-{session_id}-{view}",
+                daemon=True,
+            )
+            try:
+                worker.start()
+            except RuntimeError as error:
+                self._jobs.discard(session_id)
+                view_status.update({"status": "failed", "posture_status": "failed", "error": str(error)})
+                status.update({"status": "failed", "stage": None, "error": str(error)})
+                self._save_status(session_dir, status)
+                raise OpenPoseRunnerError(500, "Could not start posture analysis worker.") from error
+            return status
+
+    def _retry_posture_worker(
+        self, session_id: str, session_dir: Path, view: str, status: dict[str, Any]
+    ) -> None:
+        try:
+            result = run_posture_analysis(session_dir, view)
+            status["views"][view].update(result)
+            status["views"][view].update({"status": "complete", "posture_status": "complete", "error": None})
+        except Exception as error:
+            logger.exception("Posture retry failed for session=%s view=%s", session_id, view)
+            status["views"][view].update({
+                "status": "failed", "posture_status": "failed", "error": f"{view.title()} posture analysis failed: {error}",
+            })
+        finally:
+            with self._guard:
+                views = status["views"].values()
+                failed = [item.get("error") for item in views if item.get("status") == "failed"]
+                complete = bool(status["views"]) and all(item.get("status") == "complete" for item in views)
+                status.update({
+                    "status": "complete" if complete else "failed" if failed else "pending",
+                    "stage": None,
+                    "completed_at": _timestamp(),
+                    "error": "; ".join(item for item in failed if item) or None,
+                })
+                try:
+                    self._save_status(session_dir, status)
+                finally:
+                    self._jobs.discard(session_id)
 
     def _save_status(self, session_dir: Path, status: dict[str, Any]) -> None:
         with self._guard:

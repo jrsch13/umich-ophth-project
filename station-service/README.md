@@ -43,8 +43,12 @@ The backend is fixed for that FastAPI process; residents do not select it. The s
 - `POST /sessions/start` starts recording the configured cameras
 - `POST /sessions/stop` stops recording, finalizes session files, and starts OpenPose in the background
 - `GET /sessions/current` returns active recording state for page recovery
-- `GET /sessions/{session_id}/analysis-status` returns per-view OpenPose progress
-- `POST /sessions/{session_id}/analyze` starts or retries analysis for a completed session
+- `GET /sessions/{session_id}/analysis-status` returns per-view OpenPose and posture progress
+- `POST /sessions/{session_id}/analyze` starts or retries the full OpenPose pipeline for a completed session
+- `POST /sessions/{session_id}/analysis/{view}/retry` runs posture analysis from existing JSON without rerunning OpenPose
+- `GET /sessions` lists saved sessions newest-first with analysis and plot availability
+- `GET /sessions/{session_id}` returns metadata, stage status, per-view summaries and plot URLs
+- `GET /sessions/{session_id}/analysis/{view}/plots/{filename}` serves a session plot PNG
 
 Start a session with JSON such as:
 
@@ -65,6 +69,8 @@ Recording sessions are stored under `station-service/sessions/`. Each session co
 
 The service takes exclusive per-camera locks while recording. Stopping the service also stops and finalizes an active session.
 
-After recording stops, the service invokes the configured CPU or WSL wrapper once for each available raw view. The runner does not use or reopen cameras. Both backends write BODY_25 JSON under `openpose/<view>/json/`, labeled AVI files under `labeled-videos/`, and per-view PowerShell/OpenPose output under `logs/`. The selected backend is recorded in `analysis_status.json` and each view log. The API returns without waiting for inference; use the analysis-status endpoint to poll. A failed analysis preserves the raw video and can be retried with the analyze endpoint.
+After recording stops, the service invokes the configured CPU or WSL wrapper once for each available raw view. The runner does not use or reopen cameras. Both backends write BODY_25 JSON under `openpose/<view>/json/`, labeled AVI files under `labeled-videos/`, and per-view PowerShell/OpenPose output under `logs/`. Once a view's OpenPose output passes artifact checks, posture analysis writes CSV, summary JSON, and PNG plots under `analysis/<view>/`. The selected backend and each stage's status are recorded in `analysis_status.json`. The API returns without waiting for inference; use the analysis-status endpoint to poll. If posture analysis fails, its error is recorded and the raw video, OpenPose JSON, and labeled AVI remain available. Retry only that stage through the posture retry endpoint.
+
+For an existing JSON fixture such as `sessions/dummy_side_test`, start the service and call `POST /sessions/dummy_side_test/analysis/side/retry`. Poll `GET /sessions/dummy_side_test/analysis-status` until complete or failed. This retry uses `raw/side_timestamps.csv` when present and otherwise uses the 30 FPS fallback. It uses the first 10 seconds as the neutral baseline.
 
 The CPU wrapper expects the portable Windows OpenPose executable and BODY_25 models under `openpose-pipeline/openpose/`. The WSL wrapper expects the OpenPose build and BODY_25 model at `~/openpose` inside WSL, with GPU support configured as described in `openpose-pipeline/README.MD`.

@@ -7,11 +7,13 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from camera_config import load_config, save_config
 from cameras import detect_cameras, stream_camera_preview
 from openpose_runner import OpenPoseRunnerError, openpose_runner
+from session_catalog import list_sessions, plot_path, session_detail
 from session_manager import SessionError, session_manager
 
 logger = logging.getLogger(__name__)
@@ -101,6 +103,36 @@ def stop_session() -> dict[str, Any]:
 @app.get("/sessions/current")
 def get_current_session() -> dict[str, Any]:
     return session_manager.current()
+
+
+@app.get("/sessions")
+def get_sessions() -> dict[str, Any]:
+    return {"sessions": list_sessions()}
+
+
+@app.get("/sessions/{session_id}")
+def get_session(session_id: str) -> dict[str, Any]:
+    try:
+        return session_detail(session_id)
+    except OpenPoseRunnerError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+@app.get("/sessions/{session_id}/analysis/{view}/plots/{filename}")
+def get_analysis_plot(session_id: str, view: str, filename: str) -> FileResponse:
+    try:
+        path = plot_path(session_id, view, filename)
+    except OpenPoseRunnerError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    return FileResponse(path, media_type="image/png")
+
+
+@app.post("/sessions/{session_id}/analysis/{view}/retry")
+def retry_posture_analysis(session_id: str, view: str) -> dict[str, Any]:
+    try:
+        return openpose_runner.retry_posture(session_id, view)
+    except OpenPoseRunnerError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @app.get("/sessions/{session_id}/analysis-status")
