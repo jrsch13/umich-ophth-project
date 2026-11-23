@@ -7,6 +7,7 @@ import {
   LineChart,
   Pie,
   PieChart,
+  ReferenceArea,
   ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
@@ -25,31 +26,47 @@ const POSTURE_METRICS = [
     key: 'neck_flexion_extension',
     label: 'Neck flexion / extension',
     view: 'side',
-    explanation: 'Neck flexion/extension describes the head and neck moving forward or backward away from a neutral alignment. Sustained non-neutral neck positions can increase muscular loading. Ergonomic guidance for ophthalmic work recommends adjusting the patient and equipment so the neck can remain close to neutral.',
-    reference: 'RULA groups increasing neck flexion into approximately 0–10°, 10–20°, and >20° categories and separately flags neck extension.',
+    explanation: 'RULA categorizes neck posture by increasing flexion and treats extension as a separate posture category. Higher posture scores represent greater deviation from neutral.',
   },
   {
     key: 'shoulder_hiking',
     label: 'Shoulder hiking',
     view: 'rear',
-    explanation: 'Shoulder hiking is elevation of one or both shoulders away from a relaxed resting position. Ergonomic guidance recommends keeping the shoulders relaxed and avoiding sustained elevation while working.',
-    reference: 'RULA treats a raised shoulder as an additional postural loading factor; it does not define a universal percentage threshold.',
+    explanation: 'RULA adds an adjustment when a shoulder is raised. The prototype estimates shoulder elevation relative to hip width and distinguishes unilateral and bilateral shoulder hiking.',
   },
   {
     key: 'forward_trunk_lean',
     label: 'Forward trunk lean',
     view: 'side',
-    explanation: 'Forward trunk lean is flexion of the torso away from an upright or neutral posture. In ophthalmology this commonly occurs when the clinician leans toward a slit lamp or patient rather than bringing the equipment and patient closer.',
-    reference: 'Ergonomic screening methods such as RULA increase posture scores with increasing trunk flexion.',
+    explanation: 'RULA increases the trunk posture score as forward flexion increases.',
   },
   {
     key: 'lateral_trunk_lean',
     label: 'Lateral trunk lean',
     view: 'rear',
-    explanation: 'Lateral trunk lean is side-bending of the torso away from its neutral vertical alignment. Repeated or sustained side-bending is considered an awkward posture; positioning the patient and equipment to avoid reaching or leaning to one side can reduce this exposure.',
-    reference: null,
+    explanation: 'RULA adds a posture adjustment when trunk side-bending is present. The prototype uses measured lateral trunk angle to automate whether this adjustment is applied.',
   },
 ]
+
+const RULA_SCORE_COLORS = {
+  1: '#4d9475',
+  2: '#b59a3d',
+  3: '#dc8138',
+  4: '#b94f55',
+}
+
+const STATE_COLORS = {
+  shoulder_hiking: {
+    Neutral: '#7d91a0',
+    'Unilateral Right Hiking': '#3b83a0',
+    'Unilateral Left Hiking': '#c28a3b',
+    'Bilateral Hiking': '#8064a2',
+  },
+  lateral_trunk_lean: {
+    'False': '#7d91a0',
+    'True': '#c07839',
+  },
+}
 
 function formatDate(value) {
   if (!value) return 'Date unavailable'
@@ -78,15 +95,23 @@ function formatTime(seconds) {
 function formatMetricValue(value, unit) {
   if (!Number.isFinite(value)) return 'Unavailable'
   if (unit === 'degrees') return `${value.toFixed(2)}°`
-  if (unit === 'trunk_length_ratio') return `${value.toFixed(4)} trunk-length ratio`
+  if (unit === '% of hip width') return `${value.toFixed(2)}% of hip width`
   return `${value.toFixed(2)} ${unit}`
 }
 
-function formatThreshold(value, unit) {
-  if (!Number.isFinite(value)) return 'Unavailable'
-  if (unit === 'degrees') return `${value}°`
-  if (unit === 'trunk_length_ratio') return `${value} trunk-length ratio`
-  return `${value} ${unit}`
+function categoryColor(metricKey, category) {
+  if (Number.isFinite(category?.rula_score) && RULA_SCORE_COLORS[category.rula_score]) {
+    return RULA_SCORE_COLORS[category.rula_score]
+  }
+  return STATE_COLORS[metricKey]?.[category?.key] || '#7d91a0'
+}
+
+function categoryFor(summary, key) {
+  return summary?.category_distribution?.find((item) => item.key === key) || null
+}
+
+function formatPercent(value) {
+  return Number.isFinite(value) ? `${value}%` : 'Unavailable'
 }
 
 function statusDisplay(status, stage) {
@@ -187,6 +212,11 @@ function PostureSummaryCard({
   const notRecorded = summary?.reason === 'view_not_recorded'
   const insufficient = summary?.status === 'insufficient_tracking'
     && summary.reason === 'no_valid_tracking'
+  const categories = summary?.category_distribution || []
+  const hasCategories = summary?.status === 'available' && categories.length > 0
+  const uprightTolerance = definition.key === 'forward_trunk_lean'
+    ? summary?.category_definition?.upright_tolerance_degrees
+    : null
   const unavailableText = notRecorded
     ? 'View not recorded'
     : isPending
@@ -196,9 +226,6 @@ function PostureSummaryCard({
         : insufficient
           ? 'Insufficient tracking'
           : 'Analysis data unavailable'
-  const hasExposure = summary?.status === 'available'
-    && Number.isFinite(summary.within_threshold_percent)
-    && Number.isFinite(summary.above_threshold_percent)
 
   return (
     <button
@@ -209,27 +236,28 @@ function PostureSummaryCard({
       onClick={onSelect}
     >
       <div className='posture-donut'>
-        {hasExposure ? (
+        {hasCategories ? (
           <div
             role='img'
-            aria-label={`${definition.label}: ${summary.within_threshold_percent}% within threshold, ${summary.above_threshold_percent}% above threshold`}
+            aria-label={`${definition.label}: ${categories.map((category) => `${category.label}, ${formatPercent(category.percent_of_valid_time)}`).join('; ')}`}
           >
-            <PieChart width={100} height={100} aria-hidden='true'>
+            <PieChart width={108} height={108} aria-hidden='true'>
               <Pie
-                data={[
-                  { name: 'Within threshold', value: summary.within_threshold_percent },
-                  { name: 'Above threshold', value: summary.above_threshold_percent },
-                ]}
-                dataKey='value'
-                nameKey='name'
+                data={categories}
+                dataKey='percent_of_valid_time'
+                nameKey='label'
                 innerRadius={30}
                 outerRadius={45}
                 stroke='#fff'
                 strokeWidth={2}
                 isAnimationActive={false}
               >
-                <Cell fill='#43885c' />
-                <Cell fill='#d89a3b' />
+                {categories.map((category) => (
+                  <Cell
+                    key={category.key}
+                    fill={categoryColor(definition.key, category)}
+                  />
+                ))}
               </Pie>
             </PieChart>
           </div>
@@ -240,34 +268,51 @@ function PostureSummaryCard({
       <div className='posture-card-content'>
         <h3>{definition.label}</h3>
         <p>{definition.explanation}</p>
-        {definition.reference ? <p className='posture-reference'>{definition.reference}</p> : null}
-        <p className='posture-threshold'>
-          Threshold: {formatThreshold(summary?.threshold, summary?.unit || (definition.view === 'side' ? 'degrees' : 'trunk_length_ratio'))}
-        </p>
-        {hasExposure ? (
-          <>
-            <div className='posture-exposure-legend'>
-              <span><i className='legend-swatch within' />Within threshold <strong>{summary.within_threshold_percent.toFixed(1)}%</strong></span>
-              <span><i className='legend-swatch above' />Above threshold <strong>{summary.above_threshold_percent.toFixed(1)}%</strong></span>
-            </div>
-          </>
+        {Number.isFinite(uprightTolerance) ? (
+          <p className='posture-project-note'>
+            Because computer-vision measurements rarely equal exactly 0°, this prototype uses a ±{uprightTolerance}° project-specific automation tolerance to identify the RULA upright category. This is not a RULA-defined threshold.
+          </p>
+        ) : null}
+        {hasCategories ? (
+          <div className='posture-exposure-legend'>
+            {categories.map((category) => (
+              <span key={category.key}>
+                <i
+                  className='legend-swatch'
+                  style={{ backgroundColor: categoryColor(definition.key, category) }}
+                  aria-hidden='true'
+                />
+                <span>
+                  {category.label}
+                  {Number.isFinite(category.rula_score) ? ` · RULA ${category.rula_score}` : ''}
+                </span>
+                <strong>{formatPercent(category.percent_of_valid_time)}</strong>
+              </span>
+            ))}
+          </div>
         ) : (
           <span className={`posture-card-state${isFailed ? ' failed' : ''}`} role='status'>
             {unavailableText}
           </span>
         )}
         {Number.isFinite(summary?.valid_tracking_percent) ? (
-          <small className='posture-tracking'>Valid tracking: {summary.valid_tracking_percent.toFixed(1)}%</small>
+          <small
+            className='posture-tracking'
+            title='Percentage of session time for which the required OpenPose landmarks were available and the posture metric could be calculated.'
+          >
+            Valid tracking: {formatPercent(summary.valid_tracking_percent)} ⓘ
+          </small>
         ) : null}
       </div>
     </button>
   )
 }
 
-function MetricTooltip({ active, payload, label, metric }) {
+function MetricTooltip({ active, payload, label, metric, summary }) {
   if (!active || !payload?.length) return null
   const point = payload[0]?.payload
   if (!point) return null
+  const category = categoryFor(summary, point.category)
 
   return (
     <div className='metric-tooltip'>
@@ -280,9 +325,52 @@ function MetricTooltip({ active, payload, label, metric }) {
       ) : (
         <span>{metric.label}: {formatMetricValue(point.value, metric.unit)}</span>
       )}
+      {category ? (
+        <span>
+          {category.label}
+          {Number.isFinite(category.rula_score) ? ` · RULA ${category.rula_score}` : ''}
+        </span>
+      ) : null}
       <small>Frame {point.frame}</small>
     </div>
   )
+}
+
+function categoryBands(points, summary, metricKey) {
+  const runs = []
+  points.forEach((point, index) => {
+    if (!point.category) return
+    const previous = runs[runs.length - 1]
+    if (previous?.key === point.category) {
+      previous.endIndex = index
+    } else {
+      runs.push({ key: point.category, startIndex: index, endIndex: index })
+    }
+  })
+
+  return runs.flatMap((run, index) => {
+    const next = runs[index + 1]
+    const previousPoint = points[run.startIndex - 1]
+    const firstPoint = points[run.startIndex]
+    const lastPoint = points[run.endIndex]
+    const nextPoint = next ? points[next.startIndex] : null
+    const followingTime = nextPoint
+      ? (lastPoint.time_seconds + nextPoint.time_seconds) / 2
+      : lastPoint.time_seconds + (lastPoint.time_seconds - (previousPoint?.time_seconds ?? firstPoint.time_seconds)) / 2
+    const x1 = previousPoint
+      ? (previousPoint.time_seconds + firstPoint.time_seconds) / 2
+      : firstPoint.time_seconds
+    const x2 = followingTime
+    const category = categoryFor(summary, run.key)
+    if (!(x2 > x1) || !category) return []
+    return [{
+      key: `${metricKey}-${run.startIndex}-${run.key}`,
+      x1,
+      x2,
+      category,
+      fill: categoryColor(metricKey, category),
+    }]
+  })
 }
 
 function PostureOverTime({ sessionId, metric, summary }) {
@@ -392,12 +480,20 @@ function PostureOverTime({ sessionId, metric, summary }) {
       time_seconds: point.time_seconds,
       channel,
       value,
+      category: point.category,
+      posture_angle_deg: point.posture_angle_deg,
     })
   }
 
   const points = series?.points || []
   const unit = series?.unit || summary?.unit || 'degrees'
   const chartMetric = { ...metric, unit }
+  const bands = categoryBands(points, summary, metric.key)
+  const signalLabel = metric.key === 'shoulder_hiking'
+    ? '% of hip width'
+    : metric.key === 'neck_flexion_extension'
+      ? 'Neck flexion/extension (degrees)'
+      : 'Change from neutral (degrees)'
   const selectedIndex = selectedPoint
     ? points.findIndex((point) => point.frame === selectedPoint.frame)
     : -1
@@ -421,16 +517,11 @@ function PostureOverTime({ sessionId, metric, summary }) {
   )).filter(Number.isFinite)
   const yMinimum = yValues.length ? Math.min(...yValues) : 0
   const yMaximum = yValues.length ? Math.max(...yValues) : 1
-  const threshold = series?.threshold
-  const minimumPadding = unit === 'trunk_length_ratio' ? 0.0005 : 0.05
   const yPadding = Math.max(
     Math.abs(yMaximum - yMinimum) * 0.05,
-    Math.abs(threshold || 0) * 0.05,
-    minimumPadding,
+    unit === '% of hip width' ? 1 : 0.5,
   )
-  const yDomain = Number.isFinite(threshold)
-    ? [Math.min(0, yMinimum, threshold) - yPadding, Math.max(yMaximum, threshold) + yPadding]
-    : ['auto', 'auto']
+  const yDomain = [yMinimum - yPadding, yMaximum + yPadding]
 
   const renderDot = (channel) => (props) => {
     const { cx, cy, payload } = props
@@ -441,7 +532,7 @@ function PostureOverTime({ sessionId, metric, summary }) {
         cx={cx}
         cy={cy}
         r={active ? 5 : 3}
-        fill={channel === 'left_value' ? '#d49347' : '#2a688d'}
+        fill={categoryColor(metric.key, categoryFor(summary, payload.category))}
         stroke='#fff'
         strokeWidth={1}
         tabIndex={-1}
@@ -453,7 +544,11 @@ function PostureOverTime({ sessionId, metric, summary }) {
       />
     )
   }
-
+  const selectedCategory = categoryFor(summary, selectedPoint?.category)
+  const observedCategories = new Set(points.map((point) => point.category).filter(Boolean))
+  const chartCategories = (summary?.category_distribution || []).filter(
+    (category) => observedCategories.has(category.key),
+  )
   return (
     <section className='posture-over-time'>
       <div className='posture-over-time-heading'>
@@ -461,9 +556,6 @@ function PostureOverTime({ sessionId, metric, summary }) {
           <p className='eyebrow'>POSTURE OVER TIME</p>
           <h3>{metric.label}</h3>
         </div>
-        {Number.isFinite(series?.threshold) ? (
-          <span className='posture-chart-threshold'>Threshold: {formatThreshold(series.threshold, series.unit)}</span>
-        ) : null}
       </div>
       <div className='posture-over-time-layout'>
         <div className='card posture-chart-card'>
@@ -475,8 +567,11 @@ function PostureOverTime({ sessionId, metric, summary }) {
                   : (
                     <>
                       <p className='posture-chart-units'>
-                        Session time · {unit === 'degrees' ? 'Degrees' : 'Trunk-length ratio'}
+                        Session time · {signalLabel}
                         {metric.key === 'shoulder_hiking' ? ' · Right and left shoulders' : ''}
+                        {metric.key === 'forward_trunk_lean' || metric.key === 'lateral_trunk_lean'
+                          ? ' · Category bands use backend posture categories'
+                          : ''}
                       </p>
                       <div
                         className='posture-chart'
@@ -488,6 +583,18 @@ function PostureOverTime({ sessionId, metric, summary }) {
                         <ResponsiveContainer width='100%' height='100%'>
                           <LineChart data={points} margin={{ top: 12, right: 20, bottom: 10, left: 8 }}>
                             <CartesianGrid strokeDasharray='3 3' stroke='#e8edf1' />
+                            {bands.map((band) => (
+                              <ReferenceArea
+                                key={band.key}
+                                x1={band.x1}
+                                x2={band.x2}
+                                y1={yDomain[0]}
+                                y2={yDomain[1]}
+                                fill={band.fill}
+                                fillOpacity={0.14}
+                                stroke='none'
+                              />
+                            ))}
                             <XAxis
                               dataKey='time_seconds'
                               type='number'
@@ -502,19 +609,16 @@ function PostureOverTime({ sessionId, metric, summary }) {
                               tick={{ fontSize: 11, fill: '#697683' }}
                               width={64}
                               label={{
-                                value: unit === 'degrees' ? 'Degrees' : 'Trunk-length ratio',
+                                value: unit === '% of hip width' ? unit : 'Degrees',
                                 angle: -90,
                                 position: 'insideLeft',
                                 fill: '#697683',
                                 fontSize: 12,
                               }}
                             />
-                            <Tooltip active={keyboardSelection ? false : undefined} content={<MetricTooltip metric={chartMetric} />} />
-                            <ReferenceLine
-                              y={series.threshold}
-                              stroke='#d89a3b'
-                              strokeDasharray='6 4'
-                              label={{ value: 'Threshold', position: 'insideTopRight', fill: '#8a5a00', fontSize: 11 }}
+                            <Tooltip
+                              active={keyboardSelection ? false : undefined}
+                              content={<MetricTooltip metric={chartMetric} summary={summary} />}
                             />
                             {metric.key === 'shoulder_hiking' ? (
                               <>
@@ -572,6 +676,21 @@ function PostureOverTime({ sessionId, metric, summary }) {
                           <span><i className='legend-swatch left' />Left shoulder</span>
                         </div>
                       ) : null}
+                      {chartCategories.length ? (
+                        <div className='posture-series-category-legend'>
+                          {chartCategories.map((category) => (
+                            <span key={category.key}>
+                              <i
+                                className='legend-swatch'
+                                style={{ backgroundColor: categoryColor(metric.key, category) }}
+                                aria-hidden='true'
+                              />
+                              {category.label}
+                              {Number.isFinite(category.rula_score) ? ` · RULA ${category.rula_score}` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                     </>
                   )}
         </div>
@@ -585,15 +704,49 @@ function PostureOverTime({ sessionId, metric, summary }) {
           {selectedPoint ? (
             <dl className='selected-frame-context'>
               <div><dt>Time</dt><dd>{formatTime(selectedPoint.time_seconds)}</dd></div>
-              <div>
-                <dt>Metric</dt>
-                <dd>
-                  {selectedPoint.channel === 'right_value' ? 'Right shoulder: ' : ''}
-                  {selectedPoint.channel === 'left_value' ? 'Left shoulder: ' : ''}
-                  {formatMetricValue(selectedPoint.value, unit)}
-                </dd>
-              </div>
-              <div><dt>Threshold</dt><dd>{formatThreshold(series?.threshold ?? summary?.threshold, series?.unit || summary?.unit)}</dd></div>
+              {metric.key === 'neck_flexion_extension' ? (
+                <>
+                  <div><dt>Neck angle</dt><dd>{formatMetricValue(selectedPoint.value, unit)}</dd></div>
+                  {Number.isFinite(selectedCategory?.rula_score) ? (
+                    <div><dt>RULA neck posture score</dt><dd>{selectedCategory.rula_score}</dd></div>
+                  ) : null}
+                  {selectedCategory ? <div><dt>Category</dt><dd>{selectedCategory.label}</dd></div> : null}
+                </>
+              ) : null}
+              {metric.key === 'forward_trunk_lean' ? (
+                <>
+                  <div><dt>Forward trunk angle</dt><dd>{formatMetricValue(selectedPoint.posture_angle_deg, unit)}</dd></div>
+                  <div><dt>Change from neutral</dt><dd>{formatMetricValue(selectedPoint.value, unit)}</dd></div>
+                  {Number.isFinite(selectedCategory?.rula_score) ? (
+                    <div><dt>RULA trunk posture score</dt><dd>{selectedCategory.rula_score}</dd></div>
+                  ) : null}
+                  {selectedCategory ? <div><dt>Category</dt><dd>{selectedCategory.label}</dd></div> : null}
+                </>
+              ) : null}
+              {metric.key === 'lateral_trunk_lean' ? (
+                <>
+                  <div><dt>Lateral lean</dt><dd>{formatMetricValue(selectedPoint.posture_angle_deg, unit)}</dd></div>
+                  {selectedCategory ? <div><dt>RULA side-bending adjustment</dt><dd>{selectedCategory.label}</dd></div> : null}
+                </>
+              ) : null}
+              {metric.key === 'shoulder_hiking' ? (
+                <>
+                  <div>
+                    <dt>Shoulder hiking change</dt>
+                    <dd>
+                      {selectedPoint.channel === 'right_value' ? 'Right: ' : 'Left: '}
+                      {formatMetricValue(selectedPoint.value, unit)}
+                    </dd>
+                  </div>
+                  {selectedCategory ? <div><dt>Classification</dt><dd>{selectedCategory.label}</dd></div> : null}
+                  {selectedPoint.category ? (
+                    <div>
+                      <dt>RULA raised-shoulder adjustment</dt>
+                      <dd>{selectedPoint.category === 'Neutral' ? 'Not present' : 'Present'}</dd>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
               <div><dt>Frame</dt><dd>{selectedPoint.frame}</dd></div>
             </dl>
           ) : null}
@@ -616,14 +769,16 @@ function SessionDetail({ detail, status, recordedAt, retryingView, onRetry }) {
   useEffect(() => {
     if (detail.session_id === initializedSessionId.current) return
     const summaryList = detail.posture_summaries || []
-    const firstReady = POSTURE_METRICS.find((metric) => {
-      const summary = summaryList.find((item) => item.metric === metric.key)
-      return metricCanLoad(summary)
-    })
+    const firstAvailable = POSTURE_METRICS.find((metric) => (
+      summaryList.some((item) => item.metric === metric.key && item.status === 'available')
+    ))
+    const neckAvailable = summaryList.some(
+      (item) => item.metric === 'neck_flexion_extension' && item.status === 'available',
+    )
     const firstRecorded = POSTURE_METRICS.find((metric) => views.includes(metric.view))
-    const defaultMetric = views.includes('side')
-      ? POSTURE_METRICS[0]
-      : firstReady || firstRecorded || POSTURE_METRICS[0]
+    const defaultMetric = neckAvailable
+      ? POSTURE_METRICS.find((metric) => metric.key === 'neck_flexion_extension')
+      : firstAvailable || firstRecorded || POSTURE_METRICS[0]
     setSelectedMetric(defaultMetric.key)
     initializedSessionId.current = detail.session_id
   }, [detail, views])
@@ -679,9 +834,19 @@ function SessionDetail({ detail, status, recordedAt, retryingView, onRetry }) {
       <div className='posture-section-heading'>
         <div>
           <p className='eyebrow'>POSTURE SUMMARY</p>
-          <h3>Research posture exposure</h3>
+          <h3>RULA-Aligned Posture Exposure</h3>
+          <p className='posture-method-note'>
+            This prototype automates selected posture components from the Rapid Upper Limb Assessment (RULA). It does not calculate the complete RULA grand score.
+          </p>
+          <a
+            className='posture-source-link'
+            href='https://doi.org/10.1016/0003-6870(93)90080-S'
+            target='_blank'
+            rel='noreferrer'
+          >
+            McAtamney &amp; Corlett, Rapid Upper Limb Assessment (RULA), Applied Ergonomics, 1993
+          </a>
         </div>
-        <p className='posture-threshold-note'>Thresholds shown here are research posture thresholds used by this training prototype, not diagnostic cutoffs.</p>
       </div>
       <div className='posture-summary-grid'>
         {POSTURE_METRICS.map((definition) => {

@@ -14,7 +14,7 @@ from typing import Any
 import cv2
 
 from analysis.analyze_openpose import DEFAULT_FPS
-from analysis.posture_metrics import DEFAULT_THRESHOLDS
+from analysis.posture_metrics import DEFAULT_THRESHOLDS, UPRIGHT_TOLERANCE_DEG
 
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,8 @@ class MetricSpec:
     columns: tuple[str, ...]
     unit: str
     absolute_threshold: bool = True
+    posture_angle_column: str | None = None
+    posture_angle_absolute: bool = False
 
 
 METRIC_SPECS = {
@@ -41,14 +43,18 @@ METRIC_SPECS = {
         threshold_key="Neck_Flexion_Extension",
         columns=("Neck_Flexion_Extension",),
         unit="degrees",
+        posture_angle_column="Neck_Angle_Deg",
     ),
     "shoulder_hiking": MetricSpec(
         key="shoulder_hiking",
         label="Shoulder hiking",
         view="rear",
         threshold_key="Shoulder_Hiking",
-        columns=("Right_Shoulder_Hiking_Dist", "Left_Shoulder_Hiking_Dist"),
-        unit="trunk_length_ratio",
+        columns=(
+            "R_Shoulder_Hiking_Pct_Hip_Width",
+            "L_Shoulder_Hiking_Pct_Hip_Width",
+        ),
+        unit="% of hip width",
         absolute_threshold=False,
     ),
     "forward_trunk_lean": MetricSpec(
@@ -58,6 +64,8 @@ METRIC_SPECS = {
         threshold_key="Trunk_Flexion_Extension",
         columns=("Trunk_Flexion_Extension",),
         unit="degrees",
+        posture_angle_column="Trunk_Angle_Deg",
+        posture_angle_absolute=True,
     ),
     "lateral_trunk_lean": MetricSpec(
         key="lateral_trunk_lean",
@@ -66,6 +74,7 @@ METRIC_SPECS = {
         threshold_key="Trunk_Leaning",
         columns=("Trunk_Lean",),
         unit="degrees",
+        posture_angle_column="Lateral_Lean_Deg",
     ),
 }
 
@@ -253,6 +262,16 @@ def _base_summary(
         "unit": spec.unit,
         "threshold": threshold,
         "threshold_source": threshold_source,
+        "threshold_semantics": "deprecated_legacy_binary_project_heuristic",
+        "legacy_binary_threshold_exposure_deprecated": True,
+        "category_definition": (
+            {
+                "upright_tolerance_degrees": UPRIGHT_TOLERANCE_DEG,
+                "upright_tolerance_type": "project_specific_automation_tolerance",
+            }
+            if spec.key == "forward_trunk_lean"
+            else None
+        ),
         "status": status,
         "available": status == "available",
         "reason": reason,
@@ -265,15 +284,19 @@ def _base_summary(
         "total_session_seconds": (
             round(total_session_seconds, 3) if total_session_seconds is not None else None
         ),
+        "category_distribution": [],
     }
 
 
 def _is_above(row: dict[str, str], spec: MetricSpec, threshold: float) -> bool | None:
     values = [_number(row.get(column)) for column in spec.columns]
+    if spec.key == "shoulder_hiking":
+        present = [value for value in values if value is not None]
+        if not present:
+            return None
+        return any(value >= threshold for value in present)
     if any(value is None for value in values):
         return None
-    if spec.key == "shoulder_hiking":
-        return any(value >= threshold for value in values if value is not None)
     value = values[0]
     if value is None:
         return None
@@ -307,7 +330,7 @@ def _summarize_metric(
         spec, threshold, threshold_source, total_session_seconds,
         status="insufficient_tracking", reason="metric_columns_missing",
     )
-    if not rows or any(column not in rows[0] for column in spec.columns):
+    if not rows:
         return summary
 
     intervals = _row_intervals(
@@ -317,19 +340,70 @@ def _summarize_metric(
         last_recorded_frame,
     )
 
-    valid_seconds = 0.0
+    legacy_valid_seconds = 0.0
     above_seconds = 0.0
     within_seconds = 0.0
+    category_seconds: dict[str, float] = {}
+    category_column = {
+        "neck_flexion_extension": "Neck_RULA_Category",
+        "forward_trunk_lean": "Trunk_RULA_Category",
+        "lateral_trunk_lean": "Trunk_Sidebend_Adjustment_Present",
+        "shoulder_hiking": "Shoulder_Hiking_Class",
+    }[spec.key]
     for row, interval in zip(rows, intervals):
-        classification = _is_above(row, spec, threshold)
-        if classification is None or interval <= 0:
+        if interval <= 0:
             continue
-        valid_seconds += interval
-        if classification:
-            above_seconds += interval
-        else:
-            within_seconds += interval
 
+        classification = _is_above(row, spec, threshold)
+        if classification is not None:
+            legacy_valid_seconds += interval
+            if classification:
+                above_seconds += interval
+            else:
+                within_seconds += interval
+
+        category = str(row.get(category_column, "")).strip()
+        if category and category.lower() not in {"", "nan", "none", "unknown"}:
+            category_seconds[category] = (
+                category_seconds.get(category, 0.0) + interval
+            )
+
+    category_labels = {
+        "flexion_0_10": "0-10 degrees flexion",
+        "flexion_10_20": "10-20 degrees flexion",
+        "flexion_over_20": "Over 20 degrees flexion",
+        "extension": "Extension",
+        "upright": "Approximately upright",
+        "flexion_0_20": "0-20 degrees flexion",
+        "flexion_20_60": "20-60 degrees flexion",
+        "flexion_over_60": "Over 60 degrees flexion",
+        "True": "Trunk side-bending adjustment present",
+        "False": "No trunk side-bending adjustment",
+    }
+    category_scores = {
+        "flexion_0_10": 1,
+        "flexion_10_20": 2,
+        "flexion_over_20": 3,
+        "extension": 4,
+        "upright": 1,
+        "flexion_0_20": 2,
+        "flexion_20_60": 3,
+        "flexion_over_60": 4,
+    }
+    valid_seconds = sum(category_seconds.values())
+    category_distribution = []
+    for category, seconds in sorted(category_seconds.items()):
+        category_distribution.append({
+            "key": category,
+            "label": category_labels.get(category, category),
+            "rula_score": category_scores.get(category),
+            "seconds": round(seconds, 3),
+            "percent_of_valid_time": (
+                round(seconds / valid_seconds * 100.0, 2)
+                if valid_seconds > 0
+                else None
+            ),
+        })
     summary.update({
         "valid_tracking_seconds": round(valid_seconds, 3),
         "valid_tracking_percent": (
@@ -337,20 +411,32 @@ def _summarize_metric(
             if total_session_seconds and total_session_seconds > 0
             else None
         ),
+        "category_distribution": category_distribution,
     })
     if valid_seconds <= 0:
-        summary["reason"] = "no_valid_tracking"
+        summary["reason"] = (
+            "category_data_unavailable"
+            if category_column not in rows[0]
+            else "no_valid_tracking"
+        )
         return summary
 
     summary.update({
         "status": "available",
         "available": True,
         "reason": None,
-        "within_threshold_seconds": round(within_seconds, 3),
-        "above_threshold_seconds": round(above_seconds, 3),
-        "within_threshold_percent": round(within_seconds / valid_seconds * 100.0, 2),
-        "above_threshold_percent": round(above_seconds / valid_seconds * 100.0, 2),
     })
+    if legacy_valid_seconds > 0:
+        summary.update({
+            "within_threshold_seconds": round(within_seconds, 3),
+            "above_threshold_seconds": round(above_seconds, 3),
+            "within_threshold_percent": round(
+                within_seconds / legacy_valid_seconds * 100.0, 2
+            ),
+            "above_threshold_percent": round(
+                above_seconds / legacy_valid_seconds * 100.0, 2
+            ),
+        })
     return summary
 
 
@@ -412,16 +498,39 @@ def _point(row: dict[str, str], spec: MetricSpec, recorded_times: dict[int, floa
     if spec.key == "shoulder_hiking":
         if all(value is None for value in values):
             return None
-        return {
+        point = {
             "time_seconds": round(seconds, 6),
             "frame": frame,
             "right_value": round(values[0], 6) if values[0] is not None else None,
             "left_value": round(values[1], 6) if values[1] is not None else None,
         }
+        if "Shoulder_Hiking_Class" in row:
+            point["category"] = row.get("Shoulder_Hiking_Class") or None
+        return point
     value = values[0]
     if value is None:
         return None
-    return {"time_seconds": round(seconds, 6), "frame": frame, "value": round(value, 6)}
+    category_column = {
+        "neck_flexion_extension": "Neck_RULA_Category",
+        "forward_trunk_lean": "Trunk_RULA_Category",
+        "lateral_trunk_lean": "Trunk_Sidebend_Adjustment_Present",
+    }.get(spec.key)
+    category = row.get(category_column) if category_column else None
+    if category in ("", "nan", "None"):
+        category = None
+    point = {
+        "time_seconds": round(seconds, 6),
+        "frame": frame,
+        "value": round(value, 6),
+        "category": category,
+    }
+    if spec.posture_angle_column:
+        posture_angle = _number(row.get(spec.posture_angle_column))
+        if posture_angle is not None:
+            if spec.posture_angle_absolute:
+                posture_angle = abs(posture_angle)
+            point["posture_angle_deg"] = round(posture_angle, 6)
+    return point
 
 
 def _point_value(point: dict[str, Any], channel: str, spec: MetricSpec) -> float | None:
@@ -511,6 +620,8 @@ def metric_time_series(session_dir: Path, metric: str) -> dict[str, Any]:
         "view": spec.view,
         "threshold": threshold,
         "threshold_source": threshold_source,
+        "threshold_semantics": "deprecated_legacy_binary_project_heuristic",
+        "threshold_deprecated": True,
         "unit": spec.unit,
         "status": "available" if points else "insufficient_tracking",
         "reason": None if points else "no_valid_tracking",

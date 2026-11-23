@@ -96,7 +96,8 @@ class AnalysisPipelineTests(unittest.TestCase):
             )
             keypoints = [0.0] * 75
             for joint, x, y in ((0, 100, 50), (1, 100, 100), (2, 120, 110),
-                                (5, 80, 110), (8, 100, 200), (9, 110, 200), (12, 90, 200)):
+                                (5, 80, 110), (8, 100, 200), (9, 110, 200),
+                                (12, 90, 200), (17, 105, 65), (18, 95, 65)):
                 keypoints[joint * 3:joint * 3 + 3] = [x, y, 0.9]
             for frame in range(3):
                 (json_dir / f"frame_{frame:012d}_keypoints.json").write_text(

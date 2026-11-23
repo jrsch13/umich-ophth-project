@@ -61,7 +61,7 @@ The pipeline is `raw video → OpenPose JSON → posture metrics and summary →
 
 These are ergonomic descriptions, not clinical diagnoses. See AAO's [Ergonomics Simplified](https://www.aao.org/young-ophthalmologists/yo-info/article/ergonomics-simplified) and NIOSH's [About Ergonomics and Work-Related Musculoskeletal Disorders](https://www.cdc.gov/niosh/ergonomics/about/index.html) for background on neutral posture and awkward postures.
 
-The separate project classification thresholds are 5 degrees for neck flexion/extension, forward trunk flexion/extension, and lateral trunk lean; shoulder hiking is 0.01 of neutral trunk length. These are project heuristics, not universally validated clinical cutoffs.
+Session Analysis exposes RULA-aligned posture categories for neck flexion/extension and forward trunk posture, plus project-detected side-bending and raised-shoulder adjustments. The trunk's approximately-upright category uses a project-specific ±5° automation tolerance around zero; this is a noise tolerance, not a RULA-defined band. Shoulder hiking is reported as change in shoulder-to-same-side-hip distance (% of hip width), with an 18% project detection threshold for the raised-shoulder adjustment; RULA itself does not define that percentage. Category durations and percentages of valid tracking time are the canonical summary. Legacy binary threshold exposure fields remain for backward compatibility and are deprecated. These are RULA posture components, not a complete RULA assessment or grand score.
 
 ## API workflow
 

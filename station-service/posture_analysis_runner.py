@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,19 @@ def run_posture_analysis(session_dir: Path, view: str) -> dict[str, Any]:
     timestamp_path = session_dir / "raw" / f"{view}_timestamps.csv"
     output_dir = session_dir / "analysis" / view
     output_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = session_dir / "metadata.json"
+    total_session_seconds = None
+    if metadata_path.is_file():
+        with metadata_path.open(encoding="utf-8") as handle:
+            metadata = json.load(handle)
+        if isinstance(metadata, dict):
+            try:
+                duration = float(metadata.get("duration_seconds"))
+            except (TypeError, ValueError):
+                duration = math.nan
+            if math.isfinite(duration) and duration > 0:
+                total_session_seconds = duration
+
     analyze_openpose(
         json_dir,
         output_dir,
@@ -32,6 +47,7 @@ def run_posture_analysis(session_dir: Path, view: str) -> dict[str, Any]:
         fps=DEFAULT_FPS,
         neutral_seconds=DEFAULT_NEUTRAL_SECONDS,
         timestamps_csv=timestamp_path if timestamp_path.is_file() else None,
+        total_session_seconds=total_session_seconds,
     )
 
     required = [

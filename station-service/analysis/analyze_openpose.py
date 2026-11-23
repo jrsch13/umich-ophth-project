@@ -11,11 +11,11 @@ import numpy as np
 import pandas as pd
 
 if __package__:
-    from .openpose_io import load_openpose_json_dir, torso_confidence_summary
-    from .posture_metrics import DEFAULT_NEUTRAL_SECONDS, DEFAULT_THRESHOLDS, classify_frames, compute_metrics
+    from .openpose_io import DEFAULT_MIN_CONFIDENCE, load_openpose_json_dir, torso_confidence_summary
+    from .posture_metrics import DEFAULT_NEUTRAL_SECONDS, DEFAULT_THRESHOLDS, UPRIGHT_TOLERANCE_DEG, classify_frames, compute_metrics
 else:
-    from openpose_io import load_openpose_json_dir, torso_confidence_summary
-    from posture_metrics import DEFAULT_NEUTRAL_SECONDS, DEFAULT_THRESHOLDS, classify_frames, compute_metrics
+    from openpose_io import DEFAULT_MIN_CONFIDENCE, load_openpose_json_dir, torso_confidence_summary
+    from posture_metrics import DEFAULT_NEUTRAL_SECONDS, DEFAULT_THRESHOLDS, UPRIGHT_TOLERANCE_DEG, classify_frames, compute_metrics
 
 
 DEFAULT_FPS = 30.0
@@ -64,6 +64,7 @@ def build_summary(
     baselines: dict,
     thresholds: dict[str, float],
     neutral_seconds: float,
+    total_session_seconds: float | None = None,
 ) -> dict:
     summary: dict = {
         "view": view,
@@ -71,6 +72,15 @@ def build_summary(
         "neutral_seconds": neutral_seconds,
         "baselines": baselines,
         "thresholds": thresholds,
+        "categorization_tolerances": {
+            "trunk_rula_upright_degrees": {
+                "value": UPRIGHT_TOLERANCE_DEG,
+                "description": (
+                    "Project-specific automation tolerance around zero; "
+                    "not a RULA-defined angular boundary."
+                ),
+            },
+        },
         "metrics": {},
     }
 
@@ -104,11 +114,112 @@ def build_summary(
 
     for column, threshold, absolute in specs:
         if column in df:
+            metric_threshold = threshold / 100.0 if column in {
+                "Right_Shoulder_Hiking_Dist",
+                "Left_Shoulder_Hiking_Dist",
+            } else threshold
             summary["metrics"][column] = _metric_stats(
                 df[column],
-                threshold=threshold,
+                threshold=metric_threshold,
                 absolute=absolute,
             )
+
+    category_specs = [
+        ("neck", "Neck_RULA_Category", "neck_rula_category"),
+        ("forward_trunk", "Trunk_RULA_Category", "trunk_rula_category"),
+        ("lateral_trunk", "Trunk_Sidebend_Adjustment_Present", "lateral_adjustment"),
+        ("shoulder", "Shoulder_Hiking_Class", "shoulder_class"),
+    ]
+    category_scores = {
+        "flexion_0_10": 1,
+        "flexion_10_20": 2,
+        "flexion_over_20": 3,
+        "extension": 4,
+        "upright": 1,
+        "flexion_0_20": 2,
+        "flexion_20_60": 3,
+        "flexion_over_60": 4,
+    }
+    category_labels = {
+        "flexion_0_10": "0-10 degrees flexion",
+        "flexion_10_20": "10-20 degrees flexion",
+        "flexion_over_20": "Over 20 degrees flexion",
+        "extension": "Extension",
+        "upright": "Approximately upright",
+        "flexion_0_20": "0-20 degrees flexion",
+        "flexion_20_60": "20-60 degrees flexion",
+        "flexion_over_60": "Over 60 degrees flexion",
+        "True": "Trunk side-bending adjustment present",
+        "False": "No trunk side-bending adjustment",
+    }
+    summary["category_distributions"] = {}
+    for metric_name, category_column, _kind in category_specs:
+        if category_column not in df:
+            continue
+        times = pd.to_numeric(df["Time_seconds"], errors="coerce")
+        intervals = times.shift(-1) - times
+        positive_intervals = intervals[intervals.gt(0)]
+        cadence = (
+            float(positive_intervals.median())
+            if not positive_intervals.empty
+            else 1.0 / DEFAULT_FPS
+        )
+        if total_session_seconds is not None and len(times):
+            final_interval = max(
+                0.0, total_session_seconds - float(times.iloc[-1])
+            )
+        else:
+            final_interval = cadence
+        intervals = intervals.fillna(final_interval)
+        intervals = intervals.where(intervals.gt(0), cadence)
+        if total_session_seconds is not None:
+            intervals = pd.Series(
+                [
+                    min(float(interval), max(0.0, total_session_seconds - float(time)))
+                    if pd.notna(time)
+                    else 0.0
+                    for time, interval in zip(times, intervals)
+                ],
+                index=df.index,
+            )
+
+        seconds_by_category: dict[str, float] = {}
+        for category, interval in zip(df[category_column], intervals):
+            if pd.isna(category):
+                continue
+            key = str(category)
+            if key.lower() in {"", "nan", "none", "unknown"}:
+                continue
+            seconds_by_category[key] = seconds_by_category.get(key, 0.0) + float(max(0.0, interval))
+
+        valid_seconds = sum(seconds_by_category.values())
+        total_seconds = (
+            total_session_seconds
+            if total_session_seconds is not None and total_session_seconds > 0
+            else float(intervals.clip(lower=0).sum())
+        )
+        summary["category_distributions"][metric_name] = {
+            "valid_tracking_seconds": round(valid_seconds, 3),
+            "valid_tracking_percent": (
+                round(min(100.0, valid_seconds / total_seconds * 100.0), 2)
+                if total_seconds > 0
+                else None
+            ),
+            "categories": [
+                {
+                    "key": key,
+                    "label": category_labels.get(key, key),
+                    "rula_score": category_scores.get(key),
+                    "seconds": round(seconds, 3),
+                    "percent_of_valid_time": (
+                        round(seconds / valid_seconds * 100.0, 2)
+                        if valid_seconds > 0
+                        else None
+                    ),
+                }
+                for key, seconds in sorted(seconds_by_category.items())
+            ],
+        }
 
     if "Posture_Classification" in df:
         counts = df["Posture_Classification"].value_counts(dropna=False)
@@ -218,7 +329,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-confidence",
         type=float,
-        default=0.0,
+        default=DEFAULT_MIN_CONFIDENCE,
         help=(
             "Mask x/y coordinates when OpenPose confidence is at or below "
             "this value. Default 0 only masks missing keypoints."
@@ -255,8 +366,9 @@ def analyze_openpose(
     fps: float = DEFAULT_FPS,
     neutral_seconds: float = DEFAULT_NEUTRAL_SECONDS,
     timestamps_csv: str | Path | None = None,
-    min_confidence: float = 0.0,
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
     thresholds: dict[str, float] | None = None,
+    total_session_seconds: float | None = None,
 ) -> dict:
     """Analyze existing BODY_25 frames and write CSV, summary, and plots."""
     output = Path(output_dir)
@@ -291,6 +403,7 @@ def analyze_openpose(
         baselines=baselines.to_dict(),
         thresholds=thresholds,
         neutral_seconds=neutral_seconds,
+        total_session_seconds=total_session_seconds,
     )
     with (output / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, allow_nan=False)

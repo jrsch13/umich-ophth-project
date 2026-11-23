@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 
 
+DEFAULT_MIN_CONFIDENCE = 0.0
+
 BODY25_NAMES = [
     "Nose",
     "Neck",
@@ -88,7 +90,7 @@ def load_openpose_json_dir(
     *,
     fps: float = 30.0,
     timestamps_csv: str | Path | None = None,
-    min_confidence: float = 0.0,
+    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
 ) -> pd.DataFrame:
     """Load BODY_25 OpenPose JSON files into one wide per-frame dataframe.
 
