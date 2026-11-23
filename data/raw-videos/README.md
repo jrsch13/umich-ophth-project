@@ -1,1 +1,1 @@
-This folder is where the raw research videos lie, and are never modified. 
+Local source clips are kept here unchanged. Video files are Git-ignored; see [the data guide](../README.md) for storage guidance.
