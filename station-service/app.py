@@ -8,21 +8,25 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, StrictStr, field_validator
 
-from camera_config import load_config, save_config
-from cameras import detect_cameras, stream_camera_preview
+from cameras import camera_inventory, stream_camera_preview
 from openpose_runner import OpenPoseRunnerError, openpose_runner
 from session_catalog import list_sessions, plot_path, session_detail
 from session_manager import SessionError, session_manager
+from station_cameras import station_camera_manager
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    yield
-    await asyncio.to_thread(session_manager.shutdown)
+    await asyncio.to_thread(station_camera_manager.start)
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(session_manager.shutdown)
+        await asyncio.to_thread(station_camera_manager.shutdown)
 
 
 app = FastAPI(title="Station Service", version="0.1.0", lifespan=lifespan)
@@ -47,17 +51,36 @@ def get_openpose_status() -> dict[str, Any]:
 
 @app.get("/cameras")
 def get_cameras() -> dict[str, list[dict[str, Any]]]:
-    return {"cameras": detect_cameras()}
+    return {"cameras": camera_inventory()}
 
 
 @app.get("/cameras/{camera_id}/preview")
-async def get_camera_preview(camera_id: int, request: Request):
+async def get_camera_preview(camera_id: str, request: Request):
     return await stream_camera_preview(camera_id, request)
+
+
+@app.post("/cameras/rescan")
+def rescan_cameras() -> dict[str, list[dict[str, Any]]]:
+    return {"cameras": station_camera_manager.rescan(reason="explicit")}
 
 
 @app.get("/camera-config")
 def get_camera_config() -> dict[str, Any]:
-    return load_config()
+    config = station_camera_manager.get_camera_config()
+    side_camera_id = config.get("side_camera_id")
+    rear_camera_id = config.get("rear_camera_id")
+    duplicate_assignment = side_camera_id is not None and side_camera_id == rear_camera_id
+    config["needs_attention"] = {
+        "side": (
+            side_camera_id is not None
+            and (not isinstance(side_camera_id, str) or not side_camera_id.startswith("dshow:"))
+        ) or duplicate_assignment,
+        "rear": (
+            rear_camera_id is not None
+            and (not isinstance(rear_camera_id, str) or not rear_camera_id.startswith("dshow:"))
+        ) or duplicate_assignment,
+    }
+    return config
 
 
 class SessionStartRequest(BaseModel):
@@ -154,18 +177,14 @@ def analyze_session(session_id: str) -> dict[str, Any]:
 class CameraConfigUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    side_camera_id: int | None = None
-    rear_camera_id: int | None = None
+    side_camera_id: StrictStr | None = None
+    rear_camera_id: StrictStr | None = None
 
     @field_validator("side_camera_id", "rear_camera_id")
     @classmethod
-    def validate_camera_id(cls, value: int | None) -> int | None:
-        if value is None:
-            return value
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError("Camera IDs must be integers or null.")
-        if value < 0:
-            raise ValueError("Camera IDs must be zero or higher.")
+    def validate_camera_id(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("Camera IDs must be non-empty stable device IDs or null.")
         return value
 
 
@@ -177,8 +196,11 @@ def save_camera_config(config: CameraConfigUpdate) -> dict[str, Any]:
     if side_camera_id is not None and rear_camera_id is not None and side_camera_id == rear_camera_id:
         raise HTTPException(status_code=400, detail="Side and Rear cameras must be different.")
 
-    saved = save_config({
-        "side_camera_id": side_camera_id,
-        "rear_camera_id": rear_camera_id,
-    })
+    try:
+        saved = station_camera_manager.set_assignments(side_camera_id, rear_camera_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="The selected physical camera is not in the current inventory. Rescan and reassign it.",
+        ) from error
     return saved

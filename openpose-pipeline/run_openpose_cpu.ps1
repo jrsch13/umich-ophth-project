@@ -1,4 +1,77 @@
 
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Video,
+
+    [string]$Name,
+
+    [string]$OutputDir,
+
+    [string]$LabeledVideoPath,
+
+    [int]$FrameLast = -1,
+
+    [switch]$JsonOnly
+)
+
+$ErrorActionPreference = "Stop"
+
+$PipelineRoot = $PSScriptRoot
+
+$OpenPoseExe = Join-Path `
+    $PipelineRoot `
+    "openpose\bin\OpenPoseDemo.exe"
+
+$ModelFolder = Join-Path `
+    $PipelineRoot `
+    "openpose\models"
+
+if (-not (Test-Path -LiteralPath $OpenPoseExe)) {
+    throw "CPU OpenPose executable not found: $OpenPoseExe"
+}
+
+if (-not (Test-Path -LiteralPath $ModelFolder)) {
+    throw "OpenPose model folder not found: $ModelFolder"
+}
+
+$Body25Model = Join-Path `
+    $ModelFolder `
+    "pose\body_25\pose_iter_584000.caffemodel"
+
+if (-not (Test-Path -LiteralPath $Body25Model)) {
+    throw "BODY_25 model not found: $Body25Model"
+}
+
+if (-not (Test-Path -LiteralPath $Video -PathType Leaf)) {
+    throw "Video not found: $Video"
+}
+
+$VideoPath = (Resolve-Path -LiteralPath $Video).Path
+
+if (-not $Name) {
+    $Name = [System.IO.Path]::GetFileNameWithoutExtension($VideoPath)
+}
+
+$Name = $Name -replace '[<>:"/\\|?*]', '_'
+
+if (-not $OutputDir) {
+    $OutputDir = Join-Path `
+        $PipelineRoot `
+        "output\$Name"
+}
+
+$OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
+$JsonDir = Join-Path $OutputDir "json"
+
+if ($LabeledVideoPath) {
+    $LabeledVideo = [System.IO.Path]::GetFullPath($LabeledVideoPath)
+}
+else {
+    $LabeledVideo = Join-Path `
+        $OutputDir `
+        "labeled.avi"
+}
+
 New-Item `
     -ItemType Directory `
     -Force `

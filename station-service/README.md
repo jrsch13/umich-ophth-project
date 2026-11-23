@@ -36,7 +36,8 @@ The backend is fixed for that FastAPI process; residents do not select it. The s
 
 - `GET /health` returns `{ "status": "ok" }`
 - `GET /openpose/status` reports the configured OpenPose backend and readiness
-- `GET /cameras` enumerates DirectShow devices and reports each as available, busy, or unavailable
+- `GET /cameras` returns the cached DirectShow inventory and current capture status
+- `POST /cameras/rescan` explicitly refreshes the DirectShow inventory
 - `GET /cameras/{camera_id}/preview` streams the selected camera as MJPEG
 - `GET /camera-config` returns the current saved station configuration
 - `PUT /camera-config` saves the Side and Rear camera assignments
@@ -59,15 +60,17 @@ Start a session with JSON such as:
 }
 ```
 
-The runtime config is stored in `station-service/camera_config.json`. An example config is provided in `camera_config.example.json`.
+On Windows, a camera ID is a SHA-256 identifier derived from its DirectShow device path (or moniker display name when the property bag omits the path). The DirectShow enumeration index is exposed separately as `backend_index` and is used only to open that device through OpenCV's DirectShow backend. Friendly names are display-only and can be duplicated.
 
-The preview endpoint holds a per-camera lock for the lifetime of the stream, preventing discovery or another preview from opening the same camera concurrently. The camera handle is released when the stream ends or its client disconnects. Previews are reduced to at most 640x360 and approximately 15 FPS to limit CPU usage.
+The runtime config is stored in `station-service/camera_config.json`. `side_camera_id` and `rear_camera_id` store stable IDs. Existing integer/index-only assignments are returned as needing attention and are not automatically rebound; choose the physical camera again on the Cameras page and save. An example config is provided in `camera_config.example.json`.
 
-Discovery does not remove a DirectShow-enumerated device when its capture lock is busy or OpenCV cannot currently open it. Responses include `connected` and `availability` (`available`, `busy`, or `unavailable`). The backend logs camera open/release, lock ownership, preview disconnect, and recording lifecycle events with camera IDs/names and request/thread context.
+A process-level station camera manager enumerates once at service startup and thereafter only on `POST /cameras/rescan`. Cameras-page and New Session mounts and status polls read the cached inventory and do not enumerate hardware. The manager owns one capture thread and `VideoCapture` handle per configured physical camera; preview uses its latest-frame buffer and recording subscribes to frames from that same stream. A preview client disconnect does not release a configured camera. An unassigned camera opened only for an ad-hoc preview is released after its last preview subscriber disconnects.
 
-Recording sessions are stored under `station-service/sessions/`. Each session contains metadata, an `analysis_status.json` marker created on stop, and one MP4 plus per-frame timestamp CSV for each configured camera. Camera timestamps use one shared monotonic session start reference; this is software synchronization, not hardware synchronization.
+If a configured physical camera stops providing frames, that exact ID is marked disconnected and is not substituted with another same-named device. Its saved assignment is retained; use Rescan Cameras after reconnecting it. Logs include stable ID, display name, backend index, physical open/release, preview and recorder subscribers, rescan, and disconnect/reconnect events.
 
-The service takes exclusive per-camera locks while recording. Stopping the service also stops and finalizes an active session.
+Recording sessions are stored under `station-service/sessions/`. Each session contains metadata, an `analysis_status.json` marker created on stop, and one MP4 plus per-frame timestamp CSV for each configured camera. Camera timestamps use one shared monotonic session start reference; this is software synchronization, not hardware synchronization. Stopping recording detaches the recorders but leaves configured station camera streams open.
+
+The station camera manager owns physical capture streams; recording attaches to the configured streams without opening another camera handle. Stopping the service first finalizes an active recording and then releases the manager-owned streams.
 
 After recording stops, the service invokes the configured CPU or WSL wrapper once for each available raw view. The runner does not use or reopen cameras. Both backends write BODY_25 JSON under `openpose/<view>/json/`, labeled AVI files under `labeled-videos/`, and per-view PowerShell/OpenPose output under `logs/`. Once a view's OpenPose output passes artifact checks, posture analysis writes CSV, summary JSON, and PNG plots under `analysis/<view>/`. The selected backend and each stage's status are recorded in `analysis_status.json`. The API returns without waiting for inference; use the analysis-status endpoint to poll. If posture analysis fails, its error is recorded and the raw video, OpenPose JSON, and labeled AVI remain available. Retry only that stage through the posture retry endpoint.
 

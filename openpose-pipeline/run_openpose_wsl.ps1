@@ -1,3 +1,90 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Video,
+
+    [string]$Name,
+
+    [string]$OutputDir,
+
+    [string]$LabeledVideoPath,
+
+    [int]$FrameLast = -1,
+
+    [switch]$JsonOnly
+)
+
+$ErrorActionPreference = "Stop"
+
+function Convert-ToWslPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$WindowsPath
+    )
+
+    $resolved = [System.IO.Path]::GetFullPath($WindowsPath)
+
+    if ($resolved -match '^([A-Za-z]):\\(.*)$') {
+        $drive = $matches[1].ToLower()
+        $rest = $matches[2] -replace '\\', '/'
+        return "/mnt/$drive/$rest"
+    }
+
+    throw "Only local Windows drive paths are supported: $resolved"
+}
+
+function Quote-Bash {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    return "'" + $Value.Replace("'", "'\''") + "'"
+}
+
+if (-not (Test-Path -LiteralPath $Video -PathType Leaf)) {
+    throw "Video not found: $Video"
+}
+
+$VideoPath = (Resolve-Path -LiteralPath $Video).Path
+
+if (-not $Name) {
+    $Name = [System.IO.Path]::GetFileNameWithoutExtension($VideoPath)
+}
+
+$Name = $Name -replace '[<>:"/\\|?*]', '_'
+$PipelineRoot = $PSScriptRoot
+
+if (-not $OutputDir) {
+    $OutputDir = Join-Path $PipelineRoot "output\$Name"
+}
+
+$OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
+$JsonDir = Join-Path $OutputDir "json"
+
+if ($LabeledVideoPath) {
+    $LabeledVideo = [System.IO.Path]::GetFullPath($LabeledVideoPath)
+}
+else {
+    $LabeledVideo = Join-Path $OutputDir "labeled.avi"
+}
+
+$OpenPoseRootLinux = "~/openpose"
+$OpenPoseExeLinux = "~/openpose/build/examples/openpose/openpose.bin"
+$ModelFolderLinux = "~/openpose/models/"
+
+New-Item -ItemType Directory -Force -Path $JsonDir | Out-Null
+if (-not $JsonOnly) {
+    $LabeledVideoParent = Split-Path -Parent $LabeledVideo
+    New-Item -ItemType Directory -Force -Path $LabeledVideoParent | Out-Null
+}
+
+Get-ChildItem `
+    -LiteralPath $JsonDir `
+    -Filter "*_keypoints.json" `
+    -File `
+    -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+
 # Remove old overlay video if creating a new one.
 if ((-not $JsonOnly) -and (Test-Path -LiteralPath $LabeledVideo)) {
     Remove-Item -LiteralPath $LabeledVideo -Force

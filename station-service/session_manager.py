@@ -14,9 +14,8 @@ from typing import Any
 
 import cv2
 
-from camera_config import load_config
-from cameras import camera_lock, camera_name, open_camera
 from recording import CameraRecorder
+from station_cameras import FrameSubscription, station_camera_manager
 
 SESSIONS_DIR = Path(__file__).resolve().parent / "sessions"
 logger = logging.getLogger(__name__)
@@ -73,7 +72,7 @@ class SessionManager:
             if self._active_session is not None:
                 raise SessionError(409, "A session is already recording. Stop it before starting another.")
 
-            config = load_config()
+            config = station_camera_manager.get_camera_config()
             selected_cameras = {
                 "side": config.get("side_camera_id"),
                 "rear": config.get("rear_camera_id"),
@@ -86,10 +85,13 @@ class SessionManager:
             if not configured:
                 raise SessionError(400, "No cameras are configured. Assign at least one camera on the Cameras page.")
 
-            ids: set[int] = set()
+            ids: set[str] = set()
             for role, camera_id in configured:
-                if isinstance(camera_id, bool) or not isinstance(camera_id, int) or not 0 <= camera_id <= 8:
-                    raise SessionError(400, f"The saved {role.title()} camera assignment is invalid. Reassign it on the Cameras page.")
+                if not isinstance(camera_id, str) or not camera_id.startswith("dshow:"):
+                    raise SessionError(
+                        409,
+                        f"The saved {role.title()} camera assignment uses a legacy index and needs attention. Reassign it on the Cameras page.",
+                    )
                 if camera_id in ids:
                     raise SessionError(400, "Side and Rear cannot be assigned to the same camera.")
                 ids.add(camera_id)
@@ -101,68 +103,46 @@ class SessionManager:
 
             try:
                 for role, camera_id in configured:
-                    lock = camera_lock(camera_id)
-                    if not lock.acquire(blocking=False):
-                        logger.warning(
-                            "event=camera_lock_busy operation=record-open role=%s camera_id=%s name=%r thread=%s",
-                            role,
-                            camera_id,
-                            camera_name(camera_id),
-                            threading.current_thread().name,
-                        )
+                    try:
+                        subscription = station_camera_manager.attach_recorder(camera_id, role)
+                    except (KeyError, RuntimeError) as error:
                         raise SessionError(
-                            409,
-                            f"The {role.title()} camera is busy. Leave the Cameras page and try again after its preview closes.",
+                            503,
+                            f"The configured {role.title()} physical camera is unavailable. Reconnect it and use Rescan Cameras.",
+                        ) from error
+                    stream = subscription.stream
+                    first_frame = stream.latest_frame
+                    if first_frame is None:
+                        subscription.close()
+                        raise SessionError(
+                            503,
+                            f"The configured {role.title()} camera did not provide a frame. Use Rescan Cameras.",
                         )
-                    logger.info(
-                        "event=camera_lock_acquired operation=record-open role=%s camera_id=%s name=%r thread=%s",
-                        role,
-                        camera_id,
-                        camera_name(camera_id),
-                        threading.current_thread().name,
+                    width, height, reported_fps = stream.dimensions
+                    image_height, image_width = first_frame.image.shape[:2]
+                    width = width or int(image_width)
+                    height = height or int(image_height)
+                    recording_fps = (
+                        float(reported_fps)
+                        if reported_fps is not None and math.isfinite(reported_fps) and reported_fps > 0
+                        else 30.0
                     )
-
                     resource = {
                         "role": role,
                         "camera_id": camera_id,
-                        "lock": lock,
-                        "camera": None,
+                        "display_name": stream.device.display_name,
+                        "backend_index": stream.device.backend_index,
+                        "subscription": subscription,
+                        "stream": stream,
                         "writer": None,
                         "timestamp_file": None,
                         "recorder": None,
                     }
                     resources.append(resource)
-
-                    camera = open_camera(camera_id, operation="record-open")
-                    if camera is None:
-                        raise SessionError(
-                            503,
-                            f"The configured {role.title()} camera is unavailable. Reconnect it and rescan cameras.",
-                        )
-                    resource["camera"] = camera
-
-                    try:
-                        ok, first_frame = camera.read()
-                    except cv2.error as error:
-                        raise SessionError(503, f"Could not read the configured {role.title()} camera.") from error
-                    if not ok or first_frame is None:
-                        raise SessionError(
-                            503,
-                            f"The configured {role.title()} camera did not provide a frame. Reconnect it and try again.",
-                        )
-
-                    height, width = first_frame.shape[:2]
-                    reported_fps = float(camera.get(cv2.CAP_PROP_FPS) or 0)
-                    recording_fps = reported_fps if math.isfinite(reported_fps) and reported_fps > 0 else 30.0
                     resource.update({
-                        "first_frame": first_frame,
                         "width": int(width),
                         "height": int(height),
-                        "reported_fps": (
-                            reported_fps
-                            if math.isfinite(reported_fps) and reported_fps > 0
-                            else None
-                        ),
+                        "reported_fps": recording_fps if reported_fps else None,
                         "recording_fps": recording_fps,
                     })
 
@@ -210,12 +190,12 @@ class SessionManager:
                     recorder = CameraRecorder(
                         role=role,
                         camera_id=resource["camera_id"],
-                        camera=resource["camera"],
-                        lock=resource["lock"],
+                        display_name=resource["display_name"],
+                        backend_index=resource["backend_index"],
+                        subscription=resource["subscription"],
                         writer=writer,
                         timestamp_file=timestamp_file,
                         timestamp_writer=timestamp_writer,
-                        first_frame=resource["first_frame"],
                         session_start_ns=0,
                         width=resource["width"],
                         height=resource["height"],
@@ -263,6 +243,9 @@ class SessionManager:
                     "selected_cameras": selected_cameras,
                     "camera_details": {
                         item["role"]: {
+                            "camera_id": item["camera_id"],
+                            "display_name": item["display_name"],
+                            "backend_index": item["backend_index"],
                             "resolution": f"{item['width']}x{item['height']}",
                             "reported_fps": item["reported_fps"],
                             "recording_fps": item["recording_fps"],
@@ -399,12 +382,9 @@ class SessionManager:
                         if timestamp_file is not None:
                             timestamp_file.close()
                     finally:
-                        try:
-                            camera = resource["camera"]
-                            if camera is not None:
-                                camera.release()
-                        finally:
-                            resource["lock"].release()
+                        subscription: FrameSubscription | None = resource["subscription"]
+                        if subscription is not None:
+                            subscription.close()
             except (OSError, cv2.error, RuntimeError) as error:
                 cleanup_errors.append(error)
 

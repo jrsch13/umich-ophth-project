@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import csv
 import logging
+import queue
 import threading
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import cv2
 
-from cameras import camera_name
-
+from station_cameras import FrameSubscription
 
 logger = logging.getLogger(__name__)
 
@@ -21,25 +20,25 @@ class CameraRecorder:
         self,
         *,
         role: str,
-        camera_id: int,
-        camera: cv2.VideoCapture,
-        lock: threading.Lock,
+        camera_id: str,
+        display_name: str,
+        backend_index: int,
+        subscription: FrameSubscription,
         writer: cv2.VideoWriter,
         timestamp_file: Any,
         timestamp_writer: csv.writer,
-        first_frame: Any,
         session_start_ns: int,
         width: int,
         height: int,
     ) -> None:
         self.role = role
         self.camera_id = camera_id
-        self.camera = camera
-        self.lock = lock
+        self.display_name = display_name
+        self.backend_index = backend_index
+        self.subscription = subscription
         self.writer = writer
         self.timestamp_file = timestamp_file
         self.timestamp_writer = timestamp_writer
-        self.first_frame = first_frame
         self.session_start_ns = session_start_ns
         self.width = width
         self.height = height
@@ -69,27 +68,30 @@ class CameraRecorder:
             self._release_resources()
 
     def _record(self) -> None:
-        frame = self.first_frame
         logger.info(
-            "event=record_thread_started operation=record camera_id=%s name=%r role=%s thread=%s",
+            "event=record_thread_started operation=record camera_id=%s display_name=%r backend_index=%s role=%s thread=%s",
             self.camera_id,
-            camera_name(self.camera_id),
+            self.display_name,
+            self.backend_index,
             self.role,
             threading.current_thread().name,
         )
         try:
             while not self._stop_event.is_set():
-                if frame is None:
-                    ok, frame = self.camera.read()
-                    if not ok or frame is None:
+                try:
+                    frame = self.subscription.frames.get(timeout=0.25)
+                except queue.Empty:
+                    if self.subscription.stream.status in {"disconnected", "unavailable", "stopped"}:
                         if not self._stop_event.is_set():
                             self.error = f"{self.role.title()} camera stopped providing frames."
                         break
+                    continue
 
-                if frame.shape[1] != self.width or frame.shape[0] != self.height:
-                    frame = cv2.resize(frame, (self.width, self.height))
+                image = frame.image
+                if image.shape[1] != self.width or image.shape[0] != self.height:
+                    image = cv2.resize(image, (self.width, self.height))
 
-                self.writer.write(frame)
+                self.writer.write(image)
                 frame_time_ns = time.perf_counter_ns()
                 wall_time = datetime.now().astimezone().isoformat(timespec="milliseconds")
                 self.timestamp_writer.writerow(
@@ -100,7 +102,6 @@ class CameraRecorder:
                     )
                 )
                 self.frame_count += 1
-                frame = None
         except cv2.error:
             self.error = f"{self.role.title()} camera recording failed."
         except OSError:
@@ -125,22 +126,12 @@ class CameraRecorder:
             try:
                 self.timestamp_file.close()
             finally:
-                try:
-                    self.camera.release()
-                finally:
-                    self.lock.release()
-                    logger.info(
-                        "event=camera_release operation=record-close camera_id=%s name=%r role=%s thread=%s release_ms=%.1f",
-                        self.camera_id,
-                        camera_name(self.camera_id),
-                        self.role,
-                        threading.current_thread().name,
-                        (time.perf_counter() - release_started) * 1000,
-                    )
-                    logger.info(
-                        "event=camera_lock_released operation=record-close camera_id=%s name=%r role=%s thread=%s",
-                        self.camera_id,
-                        camera_name(self.camera_id),
-                        self.role,
-                        threading.current_thread().name,
-                    )
+                self.subscription.close()
+                logger.info(
+                    "event=recorder_resources_released camera_id=%s display_name=%r backend_index=%s role=%s release_ms=%.1f",
+                    self.camera_id,
+                    self.display_name,
+                    self.backend_index,
+                    self.role,
+                    (time.perf_counter() - release_started) * 1000,
+                )

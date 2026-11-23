@@ -16,6 +16,29 @@ from openpose_runner import OpenPoseRunner, OpenPoseRunnerError
 
 
 class AnalysisPipelineTests(unittest.TestCase):
+    def test_legacy_pending_status_without_views_remains_listable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sessions_dir = Path(temporary)
+            session = sessions_dir / "legacy_session"
+            raw_dir = session / "raw"
+            raw_dir.mkdir(parents=True)
+            (session / "analysis_status.json").write_text(
+                json.dumps({"status": "pending"}), encoding="utf-8"
+            )
+            (session / "metadata.json").write_text(
+                json.dumps({"resident_or_study_id": "Test", "session_label": "Legacy"}),
+                encoding="utf-8",
+            )
+            (raw_dir / "side.mp4").write_bytes(b"recorded video")
+
+            with patch.object(runner_module, "SESSIONS_DIR", sessions_dir), \
+                 patch.object(session_catalog, "SESSIONS_DIR", sessions_dir):
+                sessions = session_catalog.list_sessions()
+
+            self.assertEqual(len(sessions), 1)
+            self.assertEqual(sessions[0]["analysis_status"], "pending")
+            self.assertEqual(sessions[0]["available_views"], ["side"])
+
     def test_legacy_openpose_complete_status_is_not_full_analysis_complete(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             sessions_dir = Path(temporary)

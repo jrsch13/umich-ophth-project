@@ -116,6 +116,8 @@ class OpenPoseRunner:
                 "failed",
             }:
                 raise OpenPoseRunnerError(500, "The session analysis status file is invalid.")
+            if "views" not in status:
+                status["views"] = {}
             if not isinstance(status.get("views"), dict):
                 raise OpenPoseRunnerError(500, "The session analysis status file is invalid.")
             if status["status"] == "pending":

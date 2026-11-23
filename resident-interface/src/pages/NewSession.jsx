@@ -31,12 +31,14 @@ export default function NewSession() {
   const [analysisStatusError, setAnalysisStatusError] = useState(false)
   const [error, setError] = useState('')
 
-  const detectedCameraIds = useMemo(
-    () => new Set(cameras.map((camera) => camera.id)),
+  const availableCameraIds = useMemo(
+    () => new Set(cameras
+      .filter((camera) => camera.connected && camera.availability === 'available')
+      .map((camera) => camera.id)),
     [cameras],
   )
   const cameraNames = useMemo(
-    () => Object.fromEntries(cameras.map((camera) => [camera.id, camera.name])),
+    () => Object.fromEntries(cameras.map((camera) => [camera.id, camera.display_name])),
     [cameras],
   )
 
@@ -84,6 +86,35 @@ export default function NewSession() {
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    if (phase !== 'setup') return undefined
+
+    let active = true
+    const refreshCachedCameraStatus = async () => {
+      try {
+        const cameraList = await stationRequest('/cameras')
+        if (active) {
+          setCameras(Array.isArray(cameraList.cameras) ? cameraList.cameras : [])
+        }
+      } catch (statusError) {
+        if (active) {
+          setError(statusError.message || 'Camera status could not be refreshed.')
+          setCameras((previousCameras) => previousCameras.map((camera) => ({
+            ...camera,
+            connected: false,
+            availability: 'unavailable',
+          })))
+        }
+      }
+    }
+
+    const timer = window.setInterval(refreshCachedCameraStatus, 2000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [phase])
 
   const startRecording = useCallback(async () => {
     setError('')
@@ -234,20 +265,27 @@ export default function NewSession() {
       (phase === 'recording' || phase === 'saving')
       && sessionCameras?.[role] === cameraId
     ) {
-      return { text: 'Recording', tone: 'success', detail: `Camera ${cameraId}` }
+      return {
+        text: 'Recording',
+        tone: 'success',
+        detail: `${cameraNames[cameraId] || 'Camera'} · ${cameraId}`,
+      }
+    }
+    if (typeof cameraId !== 'string') {
+      return { text: 'Needs Attention', tone: 'warning', detail: `Legacy camera index ${cameraId} needs reassignment` }
     }
     const name = cameraNames[cameraId]
-    if (detectedCameraIds.has(cameraId)) {
+    if (availableCameraIds.has(cameraId)) {
       return {
         text: 'Ready',
         tone: 'success',
-        detail: name ? `${name} (Camera ${cameraId})` : `Camera ${cameraId}`,
+        detail: name || `Configured camera ${cameraId}`,
       }
     }
     return {
       text: 'Disconnected',
       tone: 'warning',
-      detail: `Configured camera ${cameraId} was not detected`,
+      detail: name ? `${name} is unavailable` : `Configured physical camera ${cameraId} was not detected`,
     }
   }
 
@@ -257,9 +295,11 @@ export default function NewSession() {
     configuration?.side_camera_id ?? null,
     configuration?.rear_camera_id ?? null,
   ].filter((cameraId) => cameraId !== null)
+  const duplicateConfiguredCameras = configuredIds.length === 2 && configuredIds[0] === configuredIds[1]
   const canStart = serviceReady
     && configuredIds.length > 0
-    && configuredIds.every((cameraId) => detectedCameraIds.has(cameraId))
+    && !duplicateConfiguredCameras
+    && configuredIds.every((cameraId) => availableCameraIds.has(cameraId))
 
   return (
     <>
@@ -277,7 +317,11 @@ export default function NewSession() {
         <div className='notice'>No camera is configured. Assign at least one camera on the Cameras page before starting.</div>
       ) : null}
       {!isLoading && serviceReady && configuredIds.length > 0 && !canStart && phase === 'setup' ? (
-        <div className='notice'>A configured camera is not currently available. Reconnect it and check the Cameras page before starting.</div>
+        <div className='notice'>
+          {duplicateConfiguredCameras
+            ? 'Side and Rear are assigned to the same physical camera. Reassign them on the Cameras page.'
+            : 'A configured camera is not currently available. Reconnect it and check the Cameras page before starting.'}
+        </div>
       ) : null}
 
       <div className='grid two'>
