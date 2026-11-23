@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import quote
 
 from openpose_runner import OpenPoseRunnerError, SESSIONS_DIR, VIEWS, openpose_runner
+from session_analysis_data import posture_summaries
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -34,7 +35,11 @@ def _recorded_at(metadata: dict[str, Any], path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat()
 
 
-def session_detail(session_id: str) -> dict[str, Any]:
+def session_detail(
+    session_id: str,
+    *,
+    include_posture_summaries: bool = True,
+) -> dict[str, Any]:
     session_dir = openpose_runner._session_dir(session_id)
     if not session_dir.is_dir():
         raise OpenPoseRunnerError(404, "Session not found.")
@@ -60,13 +65,16 @@ def session_detail(session_id: str) -> dict[str, Any]:
             "summary": _read_json(analysis_dir / "summary.json") if (analysis_dir / "summary.json").is_file() else None,
             "labeled_video_available": labeled.is_file() and labeled.stat().st_size > 0,
         }
-    return {
+    detail = {
         "session_id": session_id,
         "metadata": metadata,
         "analysis_status": status,
         "available_views": list(views),
         "views": views,
     }
+    if include_posture_summaries:
+        detail["posture_summaries"] = posture_summaries(session_dir, metadata)
+    return detail
 
 
 def list_sessions() -> list[dict[str, Any]]:
@@ -79,7 +87,7 @@ def list_sessions() -> list[dict[str, Any]]:
         metadata = _read_json(path / "metadata.json")
         if not metadata:
             continue
-        detail = session_detail(path.name)
+        detail = session_detail(path.name, include_posture_summaries=False)
         sessions.append({
             "session_id": path.name,
             "resident_or_study_id": metadata.get("resident_or_study_id"),

@@ -5,14 +5,15 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, StrictStr, field_validator
 
 from cameras import camera_inventory, stream_camera_preview
 from openpose_runner import OpenPoseRunnerError, openpose_runner
 from session_catalog import list_sessions, plot_path, session_detail
+from session_analysis_data import AnalysisDataError, metric_time_series, saved_video_frame
 from session_manager import SessionError, session_manager
 from station_cameras import station_camera_manager
 
@@ -153,6 +154,37 @@ def get_analysis_plot(session_id: str, view: str, filename: str) -> FileResponse
     except OpenPoseRunnerError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     return FileResponse(path, media_type="image/png")
+
+
+@app.get("/sessions/{session_id}/analysis/metrics/{metric}")
+def get_session_metric_time_series(session_id: str, metric: str) -> dict[str, Any]:
+    try:
+        session_dir = openpose_runner._session_dir(session_id)
+        if not session_dir.is_dir():
+            raise OpenPoseRunnerError(404, "Session not found.")
+        return metric_time_series(session_dir, metric)
+    except OpenPoseRunnerError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except AnalysisDataError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+@app.get("/sessions/{session_id}/analysis/frame")
+def get_session_analysis_frame(
+    session_id: str,
+    view: str,
+    frame: int = Query(ge=0),
+) -> Response:
+    try:
+        session_dir = openpose_runner._session_dir(session_id)
+        if not session_dir.is_dir():
+            raise OpenPoseRunnerError(404, "Session not found.")
+        image = saved_video_frame(session_dir, view, frame)
+        return Response(content=image, media_type="image/jpeg")
+    except OpenPoseRunnerError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except AnalysisDataError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @app.post("/sessions/{session_id}/analysis/{view}/retry")
