@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import SectionHeader from '../components/SectionHeader'
 import StatusPill from '../components/StatusPill'
 import { stationPlotUrl, stationRequest } from '../stationApi'
@@ -33,6 +33,14 @@ function formatDate(value) {
   return Number.isNaN(date.getTime())
     ? 'Date unavailable'
     : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
+function formatListDate(value) {
+  if (!value) return 'Date unavailable'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'Date unavailable'
+    : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date)
 }
 
 function statusDisplay(status, stage) {
@@ -104,6 +112,8 @@ function Summary({ summary }) {
 }
 
 function SessionList({ sessions }) {
+  const navigate = useNavigate()
+
   if (!sessions.length) {
     return <div className='card analysis-empty'>
       <h3>No sessions available for analysis yet.</h3>
@@ -112,19 +122,42 @@ function SessionList({ sessions }) {
     </div>
   }
 
-  return <div className='analysis-session-list'>
-    {sessions.map((session) => {
-      const state = statusDisplay(session.analysis_status)
-      return <Link className='card analysis-session-link' key={session.session_id} to={`/history/${encodeURIComponent(session.session_id)}`}>
-        <div>
-          <h3>{session.session_label || session.session_id}</h3>
-          <p className='muted'>{formatDate(session.recorded_at)}</p>
-          {session.resident_or_study_id ? <p className='muted small'>Resident / Study ID: {session.resident_or_study_id}</p> : null}
-          <p className='muted small'>Views: {session.available_views?.length ? session.available_views.map(viewName).join(' · ') : 'None available'}</p>
-        </div>
-        <div className='analysis-session-end'><StatusPill tone={state.tone}>{state.label}</StatusPill><span aria-hidden='true'>›</span></div>
-      </Link>
-    })}
+  return <div className='card table-card analysis-table-card'>
+    <table className='analysis-table'>
+      <thead>
+        <tr>
+          <th scope='col'>Session Label</th>
+          <th scope='col'>Date</th>
+          <th scope='col'>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sessions.map((session) => {
+          const label = session.session_label || session.session_id
+          const state = statusDisplay(session.analysis_status)
+          const destination = `/history/${encodeURIComponent(session.session_id)}`
+          const openSession = () => navigate(destination)
+          return <tr
+            className='analysis-session-row'
+            key={session.session_id}
+            tabIndex={0}
+            role='link'
+            aria-label={`Open analysis for ${label}`}
+            onClick={openSession}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                openSession()
+              }
+            }}
+          >
+            <td className='analysis-session-label'>{label}</td>
+            <td className='analysis-session-date'>{formatListDate(session.recorded_at)}</td>
+            <td className='analysis-session-status'><StatusPill tone={state.tone}>{state.label}</StatusPill></td>
+          </tr>
+        })}
+      </tbody>
+    </table>
   </div>
 }
 

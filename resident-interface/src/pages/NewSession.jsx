@@ -16,8 +16,7 @@ function formatElapsed(seconds) {
 
 export default function NewSession() {
   const [phase, setPhase] = useState('setup')
-  const [residentId, setResidentId] = useState('TEST001')
-  const [sessionLabel, setSessionLabel] = useState('Slit lamp practice')
+  const [sessionLabel, setSessionLabel] = useState('')
   const [configuration, setConfiguration] = useState(null)
   const [cameras, setCameras] = useState([])
   const [sessionCameras, setSessionCameras] = useState(null)
@@ -123,8 +122,7 @@ export default function NewSession() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          resident_id: residentId,
-          session_label: sessionLabel,
+          session_label: sessionLabel.trim(),
         }),
       })
       setSessionId(result.session_id)
@@ -138,7 +136,7 @@ export default function NewSession() {
       setError(startError.message || 'Could not start recording.')
       setPhase('setup')
     }
-  }, [configuration, residentId, sessionLabel])
+  }, [configuration, sessionLabel])
 
   useEffect(() => {
     if (phase !== 'countdown') return undefined
@@ -324,24 +322,16 @@ export default function NewSession() {
         </div>
       ) : null}
 
-      <div className='grid two'>
-        <section className='card'>
+      <div className='new-session-layout'>
+        <section className='card new-session-card'>
           <h3>Session setup</h3>
-          <label className='field'>
-            <span>Resident / Study ID</span>
-            <input
-              value={residentId}
-              onChange={(event) => setResidentId(event.target.value)}
-              disabled={phase !== 'setup' || isLoading}
-              required
-            />
-          </label>
           <label className='field'>
             <span>Session label</span>
             <input
               value={sessionLabel}
               onChange={(event) => setSessionLabel(event.target.value)}
               disabled={phase !== 'setup' || isLoading}
+              placeholder='Type session name here'
               required
             />
           </label>
@@ -362,7 +352,7 @@ export default function NewSession() {
                 setError('')
                 setPhase('countdown')
               }}
-              disabled={isLoading || !canStart || !residentId.trim() || !sessionLabel.trim()}
+              disabled={isLoading || !canStart || !sessionLabel.trim()}
             >
               START SESSION
             </button>
@@ -372,16 +362,7 @@ export default function NewSession() {
               Cancel countdown
             </button>
           ) : null}
-        </section>
-
-        <section className='card'>
           {isLoading ? <p>Loading station configuration...</p> : null}
-          {!isLoading && phase === 'setup' ? (
-            <>
-              <h3>Ready to record</h3>
-              <p className='muted'>The station service will record each configured camera to a local session folder.</p>
-            </>
-          ) : null}
           {phase === 'countdown' ? (
             <div style={{ textAlign: 'center', padding: '22px 0' }}>
               <h3>Recording starts in</h3>

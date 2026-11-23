@@ -86,12 +86,17 @@ def get_camera_config() -> dict[str, Any]:
 class SessionStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resident_id: str
+    resident_id: str = ""
     session_label: str
 
-    @field_validator("resident_id", "session_label")
+    @field_validator("resident_id")
     @classmethod
-    def strip_required_text(cls, value: str) -> str:
+    def strip_resident_id(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("session_label")
+    @classmethod
+    def strip_session_label(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
             raise ValueError("This field cannot be empty.")
