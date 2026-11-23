@@ -14,6 +14,7 @@ from typing import Any
 
 import cv2
 
+from analysis_status_store import write_status
 from recording import CameraRecorder
 from station_cameras import FrameSubscription, station_camera_manager
 
@@ -310,8 +311,7 @@ class SessionManager:
 
             save_error: OSError | None = None
             try:
-                _write_json(session["session_dir"] / "metadata.json", metadata)
-                _write_json(
+                write_status(
                     session["session_dir"] / "analysis_status.json",
                     {
                         "status": "pending",
@@ -330,8 +330,13 @@ class SessionManager:
                         },
                     },
                 )
+                _write_json(session["session_dir"] / "metadata.json", metadata)
             except OSError as error:
                 save_error = error
+                logger.exception(
+                    "Could not persist stopped session metadata/status for session=%s",
+                    session["session_id"],
+                )
             finally:
                 self._active_session = None
                 logger.info(

@@ -74,6 +74,8 @@ The station camera manager owns physical capture streams; recording attaches to 
 
 After recording stops, the service invokes the configured CPU or WSL wrapper once for each available raw view. The runner does not use or reopen cameras. Both backends write BODY_25 JSON under `openpose/<view>/json/`, labeled AVI files under `labeled-videos/`, and per-view PowerShell/OpenPose output under `logs/`. Once a view's OpenPose output passes artifact checks, posture analysis writes CSV, summary JSON, and PNG plots under `analysis/<view>/`. The selected backend and each stage's status are recorded in `analysis_status.json`. The API returns without waiting for inference; use the analysis-status endpoint to poll. If posture analysis fails, its error is recorded and the raw video, OpenPose JSON, and labeled AVI remain available. Retry only that stage through the posture retry endpoint.
 
+Analysis status updates are synchronized per session and written through unique same-directory temporary files with bounded retries for transient Windows file locks.
+
 For an existing JSON fixture such as `sessions/dummy_side_test`, start the service and call `POST /sessions/dummy_side_test/analysis/side/retry`. Poll `GET /sessions/dummy_side_test/analysis-status` until complete or failed. This retry uses `raw/side_timestamps.csv` when present and otherwise uses the 30 FPS fallback. It uses the first 10 seconds as the neutral baseline.
 
 The CPU wrapper expects the portable Windows OpenPose executable and BODY_25 models under `openpose-pipeline/openpose/`. The WSL wrapper expects the OpenPose build and BODY_25 model at `~/openpose` inside WSL, with GPU support configured as described in `openpose-pipeline/README.MD`.
