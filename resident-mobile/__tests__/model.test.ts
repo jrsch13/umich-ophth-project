@@ -6,6 +6,7 @@ test('HTTPS configuration accepts a same-API prefix and disallows embedded crede
   expect(httpsApiUrl('http://station.example.test')).toBeNull();
   expect(httpsApiUrl('https://name:password@station.example.test')).toBeNull();
   expect(httpsApiUrl('https://station.example.test/api?key=value')).toBeNull();
+  expect(httpsApiUrl('https://station-dev.example.edu:8443')).toBeNull();
 });
 
 test('nearest-point selection handles irregular sampling and category gaps', () => {

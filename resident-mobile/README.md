@@ -4,27 +4,27 @@ An Expo SDK 58 and TypeScript app for reviewing session results on iPhone and An
 
 ## Install and start
 
-Use Node.js 22.13 or newer. From the repository root in PowerShell:
+Use Node.js 22.13 or newer. Start your HTTPS station API using the steps below and verify its `/health` endpoint from the phone before signing in. From the repository root in PowerShell:
 
 ```powershell
 cd resident-mobile
 npm.cmd ci
-Copy-Item .env.example .env.local
+if (-not (Test-Path .env.local)) { Copy-Item .env.example .env.local }
 ```
 
-Edit `.env.local` to point to your device-reachable station API. For example:
+Open `.env.local` and set `EXPO_PUBLIC_API_BASE_URL` to the HTTPS address that worked on the phone, without `/health`. Replace the entire sample address shown here:
 
 ```dotenv
 EXPO_PUBLIC_API_BASE_URL=https://station-dev.example.edu:8443
 ```
 
-Use the real HTTPS station address, including any API path prefix. Treat this value as public app configuration. Restart Metro after changing it.
+Include any API path prefix. Treat this value as public app configuration. After changing it, restart Metro and reload the project in Expo Go.
 
 ```powershell
 npm.cmd start -- --lan
 ```
 
-Run the backend separately. Set up the identity database and accounts using the [station-service instructions](../station-service/README.md). Mobile sign-in uses `POST /auth/token`, which requires HTTPS outside the backend's local loopback development mode.
+Expo's `--lan` starts Metro, which delivers the app to the phone. The station API runs in a separate terminal. Set up the identity database and accounts using the [station-service instructions](../station-service/README.md). Mobile sign-in uses `POST /auth/token`, which requires HTTPS outside the backend's local loopback development mode.
 
 ## Connect a phone to the development API
 

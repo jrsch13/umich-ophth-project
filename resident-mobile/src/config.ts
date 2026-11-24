@@ -3,6 +3,7 @@ export function httpsApiUrl(value: string | undefined): string | null {
   try {
     const url = new URL(value.trim());
     if (url.protocol !== 'https:' || !url.hostname || url.username || url.password || url.search || url.hash) return null;
+    if (url.hostname === 'station-dev.example.edu') return null;
     return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
   } catch {
     return null;

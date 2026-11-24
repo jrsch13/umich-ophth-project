@@ -82,7 +82,9 @@ export function LoginScreen() {
                   value={password}
                 />
               </View>
-              {!configured && <Text style={styles.notice}>A secure station API address is needed to sign in.</Text>}
+              {!configured && <Text accessibilityRole='alert' style={styles.notice}>
+                Set the station’s HTTPS API address in .env.local, then reload the app.
+              </Text>}
               {notice && <Text accessibilityRole='alert' accessibilityLiveRegion='polite' style={styles.notice}>{notice}</Text>}
               <Action label={busy ? 'Logging in…' : 'Log In'} onPress={submit} disabled={!canSubmit} />
             </View>
