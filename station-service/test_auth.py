@@ -1,5 +1,6 @@
 """Account lifecycle and HTTP authorization regression tests."""
 
+import io
 import json
 import os
 import secrets
@@ -7,6 +8,7 @@ import tempfile
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stdout
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -24,7 +26,7 @@ import app as station_app
 import openpose_runner as runner_module
 import session_catalog
 import session_manager as recorder_module
-from auth import create_admin, security
+from auth import config as auth_config, create_admin, db as auth_db, list_users, security
 from auth.config import allowed_web_origins
 from auth.db import engine_for
 from auth.models import AuthSession, Invitation, User, utcnow
@@ -388,3 +390,89 @@ class AuthTests(unittest.TestCase):
             self.assertTrue(security.password_hasher.verify(self.password, user.password_hash))
         with self.assertRaisesRegex(SystemExit, "already exists"):
             create_admin.main()
+
+    def test_cli_admin_logs_in_through_the_api_database(self):
+        with Session(self.engine) as db:
+            db.execute(delete(User).where(User.role == "admin"))
+            db.commit()
+        with patch("builtins.input", return_value="lab-admin@example.com"), \
+             patch.object(create_admin, "getpass", return_value=self.password), patch("builtins.print"):
+            create_admin.main()
+        client = self.client()
+        self.assertEqual(self.login(client, "lab-admin@example.com").status_code, 204)
+        self.assertEqual(client.get("/auth/me").json()["role"], "admin")
+        wrong = self.login(self.client(), "lab-admin@example.com", secrets.token_urlsafe(24))
+        self.assertEqual((wrong.status_code, wrong.json()), (401, {"detail": "Invalid email or password."}))
+
+    def test_create_admin_refuses_existing_email_without_duplicating(self):
+        with Session(self.engine) as db:
+            db.execute(delete(User).where(User.role == "admin"))
+            db.commit()
+        with patch("builtins.input", return_value=RESIDENT_A.upper()), \
+             patch.object(create_admin, "getpass") as password_prompt, patch("builtins.print"), \
+             self.assertRaisesRegex(SystemExit, "already exists"):
+            create_admin.main()
+        password_prompt.assert_not_called()
+        with Session(self.engine) as db:
+            self.assertEqual(db.scalars(select(User.role).where(User.email == RESIDENT_A)).all(), ["resident"])
+
+    def test_create_admin_reports_unmigrated_database_without_creating_it(self):
+        missing = self.sessions.parent / "missing.sqlite3"
+        with patch.dict(os.environ, {"AUTH_DATABASE_URL": f"sqlite:///{missing.as_posix()}"}), \
+             patch("builtins.print"), self.assertRaisesRegex(SystemExit, "alembic upgrade head"):
+            create_admin.main()
+        self.assertFalse(missing.exists())
+
+    def test_list_users_prints_only_safe_fields(self):
+        token = self.invitation()
+        cookie = self.client(ADMIN).cookies.get("__Host-station_session")
+        with Session(self.engine) as db:
+            db.execute(update(User).where(User.email == RESIDENT_B).values(is_active=False))
+            db.commit()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            list_users.main()
+        text = output.getvalue()
+        for email in (ADMIN, RESIDENT_A, RESIDENT_B):
+            self.assertIn(email, text)
+        self.assertRegex(text, rf"{RESIDENT_B}\s+resident\s+inactive")
+        self.assertRegex(text, rf"{ADMIN}\s+admin\s+active")
+        for secret in (self.hashed_password, "$argon2", token, security.token_hash(token), cookie):
+            self.assertNotIn(secret, text)
+
+
+class DatabaseConfigTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("AUTH_DATABASE_URL", None)
+        self.addCleanup(os.chdir, os.getcwd())
+
+    def test_default_sqlite_path_ignores_working_directory(self):
+        expected = f"sqlite:///{(Path(__file__).resolve().parent / 'auth.sqlite3').as_posix()}"
+        for directory in (tempfile.gettempdir(), Path(__file__).resolve().parents[1], Path(__file__).parent):
+            os.chdir(directory)
+            self.assertEqual(auth_config.database_url(), expected)
+        os.environ["AUTH_DATABASE_URL"] = "   "
+        self.assertEqual(auth_config.database_url(), expected)
+
+    def test_relative_sqlite_override_resolves_against_service_directory(self):
+        os.environ["AUTH_DATABASE_URL"] = "sqlite:///dev/other.sqlite3"
+        expected = (Path(__file__).resolve().parent / "dev" / "other.sqlite3").as_posix()
+        for directory in (tempfile.gettempdir(), Path(__file__).parent):
+            os.chdir(directory)
+            self.assertEqual(auth_config.database_url(), f"sqlite:///{expected}")
+
+    def test_database_url_variable_overrides_default_for_every_consumer(self):
+        with tempfile.TemporaryDirectory() as root:
+            url = f"sqlite:///{(Path(root) / 'override.sqlite3').as_posix()}"
+            os.environ["AUTH_DATABASE_URL"] = url
+            self.addCleanup(engine_for.cache_clear)
+            self.assertEqual(auth_config.database_url(), url)
+            self.assertEqual(str(auth_db.engine().url), url)
+            self.assertIs(auth_db.engine(), engine_for(url))
+            auth_db.engine().dispose()
+
+        os.environ["AUTH_DATABASE_URL"] = "postgresql+psycopg://station:s3cret@db.example.com:5432/identity"
+        self.assertEqual(auth_config.database_url(), os.environ["AUTH_DATABASE_URL"])
+        self.assertIsNone(auth_config.sqlite_path())
+        self.assertNotIn("s3cret", auth_config.database_description())

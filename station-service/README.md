@@ -17,7 +17,17 @@ $env:OPENPOSE_BACKEND = "cpu" # Or "wsl" on an NVIDIA/WSL workstation.
 python -m uvicorn app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Run `python -m auth.create_admin` once after migrating. It prompts for an email and a password of 12–128 characters with echo disabled. Later account creation uses invitations. Apply `python -m alembic upgrade head` when upgrading the database schema.
+Run `python -m auth.create_admin` once after migrating. It prompts for an email and a password of 12–128 characters with echo disabled. It refuses, without changing anything, if the database already has an administrator or an account for that email. Later account creation uses invitations. Apply `python -m alembic upgrade head` when upgrading the database schema.
+
+Run `python -m auth.list_users` to see which identity database this machine uses and the accounts it holds (email, role, active/inactive, creation time). It never prints password hashes or tokens.
+
+## Development databases
+
+- Uvicorn, `auth.create_admin`, `auth.list_users`, invitations, Alembic, and tests all read one setting from `auth/config.py`. With `AUTH_DATABASE_URL` unset, that is `station-service/auth.sqlite3`, resolved from the code location, so the working directory does not matter. A relative SQLite path in `AUTH_DATABASE_URL` also resolves against `station-service/`.
+- Local SQLite accounts are machine-specific. Creating an admin on Computer A does not create that user on Computer B. Login on B returns the generic `401 Invalid email or password.`
+- Each development machine needs its own bootstrap admin: `python -m alembic upgrade head`, then `python -m auth.create_admin`. Reusing the same email is fine; it is a separate record with its own password hash.
+- Never synchronize or commit credential databases through Git, OneDrive, or a network share. `auth.sqlite3*` is Git-ignored.
+- Production, multiple stations, and the mobile app need one centralized API backed by one server database (for example, PostgreSQL through `AUTH_DATABASE_URL`) so every client authenticates against the same accounts.
 
 The backend defaults to `cpu` when `OPENPOSE_BACKEND` is unset. Set `$env:OPENPOSE_BACKEND = "wsl"` for NVIDIA/WSL. The authenticated station interface can check readiness at `GET /openpose/status`. See [OpenPose setup](../openpose-pipeline/README.md) for installing either runtime.
 
@@ -27,7 +37,7 @@ The React interface runs separately from `resident-interface/` with `npm.cmd run
 
 | Variable | Purpose |
 | --- | --- |
-| `AUTH_DATABASE_URL` | SQLAlchemy database URL. Omit it to use the Git-ignored `station-service/auth.sqlite3`. For PostgreSQL install `psycopg[binary]`, set a `postgresql+psycopg://` URL in the environment, and run the same Alembic migrations. Keep database credentials out of Git and preserve user IDs when migrating data. |
+| `AUTH_DATABASE_URL` | SQLAlchemy database URL for all identity data. Omit it to use the Git-ignored `station-service/auth.sqlite3`. For PostgreSQL install `psycopg[binary]`, set a `postgresql+psycopg://` URL in the environment, and run the same Alembic migrations. Keep database credentials out of Git and preserve user IDs when migrating data. |
 | `AUTH_WEB_ORIGIN` | Trusted web origin for credentialed CORS, browser writes, and generated invitation links. Defaults to `http://127.0.0.1:5173`. Set it to the actual HTTPS frontend origin for a deployed station, or include the new port if you change the local Vite port. |
 | `AUTH_ALLOW_INSECURE_LOCAL_HTTP` | Use `1` for local HTTP development on loopback. The backend accepts `127.0.0.1`, `localhost`, and `[::1]` on the configured frontend port in this mode. Leave it unset for deployment. |
 
@@ -90,7 +100,7 @@ Category and reference-zone percentages use valid tracked time. The API reports 
 
 ## API workflow
 
-- `POST /auth/login` accepts JSON with `email` and `password` and sets the browser cookie. `POST /auth/logout` revokes the current browser or native credential.
+- `POST /auth/login` accepts JSON with `email` and `password` and sets the browser cookie. It is the browser counterpart of the native `POST /auth/token`; both verify passwords with the same function against the same database and return the same generic 401. `POST /auth/logout` revokes the current browser or native credential.
 - `POST /admin/invitations` creates a single-use resident invitation. The browser posts the token in JSON to `/auth/invitations/preview` and `/auth/invitations/accept`. Invitation links put the token in the URL fragment so it stays out of normal HTTP request URLs.
 - `GET /cameras` reads the cached camera inventory; `POST /cameras/rescan` refreshes it. `GET`/`PUT /camera-config` reads or saves assignments.
 - `POST /sessions/start` and `/sessions/stop` record a session; stop starts analysis in the background.
