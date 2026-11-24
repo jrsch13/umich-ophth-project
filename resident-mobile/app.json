@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Ergonomic Training Station",
+    "slug": "ophthalmology-posture-review",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": { "supportsTablet": false },
+    "plugins": ["expo-secure-store"]
+  }
+}
