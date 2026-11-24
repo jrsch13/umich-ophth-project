@@ -16,7 +16,8 @@ import {
 } from 'recharts'
 import SectionHeader from '../components/SectionHeader'
 import StatusPill from '../components/StatusPill'
-import { STATION_SERVICE_URL, stationRequest } from '../stationApi'
+import { useAuth } from '../auth'
+import { stationFetch, stationRequest } from '../stationApi'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -178,6 +179,8 @@ function stageLabel(status) {
 
 function SessionList({ sessions }) {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const isAdmin = user.role === 'admin'
 
   if (!sessions.length) {
     return <div className='card analysis-empty'>
@@ -191,6 +194,7 @@ function SessionList({ sessions }) {
     <table className='analysis-table'>
       <thead>
         <tr>
+          {isAdmin && <th scope='col'>Resident</th>}
           <th scope='col'>Session Label</th>
           <th scope='col'>Date</th>
           <th scope='col'>Status</th>
@@ -216,6 +220,7 @@ function SessionList({ sessions }) {
               }
             }}
           >
+            {isAdmin && <td className='analysis-session-owner'>{session.owner_email || session.owner_user_id || 'Unassigned'}</td>}
             <td className='analysis-session-label'>{label}</td>
             <td className='analysis-session-date'>{formatListDate(session.recorded_at)}</td>
             <td className='analysis-session-status'><StatusPill tone={state.tone}>{state.label}</StatusPill></td>
@@ -456,8 +461,8 @@ function PostureOverTime({ sessionId, metric, summary }) {
     setFrameUrl('')
     setFrameLoading(true)
     setFrameError('')
-    const url = `${STATION_SERVICE_URL}/sessions/${encodeURIComponent(sessionId)}/analysis/frame?view=${metric.view}&frame=${selectedPoint.frame}`
-    fetch(url, { signal: controller.signal })
+    const path = `/sessions/${encodeURIComponent(sessionId)}/analysis/frame?view=${metric.view}&frame=${selectedPoint.frame}`
+    stationFetch(path, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) {
           let message = 'Could not load the selected video frame.'

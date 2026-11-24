@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import StatusPill from '../components/StatusPill'
 import SectionHeader from '../components/SectionHeader'
+import InviteUsers from '../components/InviteUsers'
+import { useAuth } from '../auth'
 import { stationRequest } from '../stationApi'
 
 function MostRecentSession() {
@@ -74,6 +76,7 @@ function MostRecentSession() {
 }
 
 export default function Home() {
+  const { user } = useAuth()
   return (
     <>
       <section className='hero'>
@@ -92,6 +95,7 @@ export default function Home() {
         </section>
         <MostRecentSession />
       </div>
+      {user.role === 'admin' && <InviteUsers />}
       <section className='card'>
         <SectionHeader title='How a session works' />
         <div className='steps'>

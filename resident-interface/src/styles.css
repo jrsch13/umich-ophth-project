@@ -6,6 +6,15 @@
 @media(max-width:1050px){.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .new-session-layout{max-width:680px;margin:0 auto}
+.auth-page{max-width:480px;padding-top:12vh}
+.auth-card h1{margin:8px 0 22px;color:#173b57;font-size:28px}
+.signed-in-user{min-width:0}
+.signed-in-user .user-name{max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-chip .button{white-space:nowrap}
+.invite-card{margin-bottom:20px}
+.invite-card .field{max-width:560px}
+.analysis-session-owner{max-width:26ch;overflow-wrap:anywhere}
+@media(max-width:560px){.topbar .brand{font-size:13px}.topbar .brand-mark{display:none}.topbar .user-chip{gap:6px}.signed-in-user .user-name{max-width:14ch}.topbar .user-chip .button{padding:8px}}
 .new-session-card{width:100%}
 .analysis-table-card{padding:8px 20px}
 .analysis-table{min-width:560px}

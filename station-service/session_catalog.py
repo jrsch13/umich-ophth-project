@@ -23,6 +23,10 @@ def _read_json(path: Path) -> dict[str, Any]:
     return {}
 
 
+def session_metadata(session_dir: Path) -> dict[str, Any]:
+    return _read_json(session_dir / "metadata.json")
+
+
 def _recorded_at(metadata: dict[str, Any], path: Path) -> str:
     for key in ("started_at", "ended_at", "created_at"):
         value = metadata.get(key)
@@ -43,7 +47,7 @@ def session_detail(
     session_dir = openpose_runner._session_dir(session_id)
     if not session_dir.is_dir():
         raise OpenPoseRunnerError(404, "Session not found.")
-    metadata = _read_json(session_dir / "metadata.json")
+    metadata = session_metadata(session_dir)
     status = openpose_runner.get_status(session_id)
     views: dict[str, Any] = {}
     for view in VIEWS:
@@ -77,19 +81,20 @@ def session_detail(
     return detail
 
 
-def list_sessions() -> list[dict[str, Any]]:
+def list_sessions(*, owner_user_id: str | None = None) -> list[dict[str, Any]]:
     if not SESSIONS_DIR.is_dir():
         return []
     sessions = []
     for path in SESSIONS_DIR.iterdir():
         if not path.is_dir() or path.is_symlink():
             continue
-        metadata = _read_json(path / "metadata.json")
-        if not metadata:
+        metadata = session_metadata(path)
+        if not metadata or (owner_user_id is not None and metadata.get("owner_user_id") != owner_user_id):
             continue
         detail = session_detail(path.name, include_posture_summaries=False)
         sessions.append({
             "session_id": path.name,
+            "owner_user_id": metadata.get("owner_user_id") if isinstance(metadata.get("owner_user_id"), str) else None,
             "resident_or_study_id": metadata.get("resident_or_study_id"),
             "session_label": metadata.get("session_label"),
             "recorded_at": _recorded_at(metadata, path),

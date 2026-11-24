@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import SectionHeader from '../components/SectionHeader'
 import StatusPill from '../components/StatusPill'
 
-import { STATION_SERVICE_URL } from '../stationApi'
+import { stationFetch } from '../stationApi'
 const HEADER_SEPARATOR = new TextEncoder().encode('\r\n\r\n')
 
 function findBytes(haystack, needle, fromIndex = 0) {
@@ -69,8 +69,8 @@ function CameraPreview({ cameraId, onFailureChange }) {
       onFailureChange(false)
 
       try {
-        const response = await fetch(
-          `${STATION_SERVICE_URL}/cameras/${encodeURIComponent(cameraId)}/preview`,
+        const response = await stationFetch(
+          `/cameras/${encodeURIComponent(cameraId)}/preview`,
           { signal: controller.signal },
         )
         if (!response.ok) {
@@ -312,7 +312,7 @@ export default function Cameras() {
 
   const loadSavedConfig = async (signal) => {
     try {
-      const response = await fetch(`${STATION_SERVICE_URL}/camera-config`, { signal })
+      const response = await stationFetch('/camera-config', { signal })
       if (!response.ok) {
         throw new Error('Saved station configuration could not be loaded.')
       }
@@ -360,7 +360,7 @@ export default function Cameras() {
       await new Promise((resolve) => {
         window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))
       })
-      const response = await fetch(`${STATION_SERVICE_URL}/cameras/rescan`, {
+      const response = await stationFetch('/cameras/rescan', {
         method: 'POST',
         signal: controller.signal,
       })
@@ -391,7 +391,7 @@ export default function Cameras() {
       try {
         await loadSavedConfig(controller.signal)
         if (!active) return
-        const response = await fetch(`${STATION_SERVICE_URL}/cameras`, { signal: controller.signal })
+        const response = await stationFetch('/cameras', { signal: controller.signal })
         if (!response.ok) {
           throw new Error('The station service is unavailable or returned an error.')
         }
@@ -422,7 +422,7 @@ export default function Cameras() {
     let active = true
     const refreshCachedStatus = async () => {
       try {
-        const response = await fetch(`${STATION_SERVICE_URL}/cameras`)
+        const response = await stationFetch('/cameras')
         if (!response.ok) {
           throw new Error('The station service could not refresh camera status.')
         }
@@ -460,7 +460,7 @@ export default function Cameras() {
     setSaveMessage('')
 
     try {
-      const response = await fetch(`${STATION_SERVICE_URL}/camera-config`, {
+      const response = await stationFetch('/camera-config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

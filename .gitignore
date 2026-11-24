@@ -24,6 +24,7 @@ __pycache__/
 station-service/.venv/
 station-service/camera_config.json
 station-service/sessions/
+station-service/auth.sqlite3*
 
 # React / Vite
 **/node_modules/

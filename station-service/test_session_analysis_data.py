@@ -19,6 +19,8 @@ import openpose_runner as runner_module
 import session_catalog
 from analysis.analyze_openpose import build_summary
 from analysis.posture_metrics import DEFAULT_THRESHOLDS
+from auth.models import User
+from auth.security import Identity, require_authenticated
 from session_analysis_data import METRIC_SPECS, metric_time_series, posture_summaries
 
 
@@ -28,6 +30,11 @@ class SessionAnalysisDataTests(unittest.TestCase):
         self.sessions_dir = Path(self.temporary.name)
         self.session_dir = self.sessions_dir / "test_session"
         (self.session_dir / "raw").mkdir(parents=True)
+        # These tests target the posture APIs using an administrator for legacy fixtures.
+        identity = Identity(User(id="posture-test-admin", role="admin"), "browser", "test")
+        overrides = station_app.app.dependency_overrides
+        overrides[require_authenticated] = lambda: identity
+        self.addCleanup(overrides.pop, require_authenticated, None)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()

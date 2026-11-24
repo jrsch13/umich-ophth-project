@@ -10,13 +10,35 @@ Run from PowerShell in `station-service/`:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python -m alembic upgrade head
+python -m auth.create_admin
+$env:AUTH_ALLOW_INSECURE_LOCAL_HTTP = "1"
 $env:OPENPOSE_BACKEND = "cpu" # Or "wsl" on an NVIDIA/WSL workstation.
-uvicorn app:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-The backend defaults to `cpu` when `OPENPOSE_BACKEND` is unset. Set `$env:OPENPOSE_BACKEND = "wsl"` for NVIDIA/WSL; it does not fall back between backends. Check `GET /openpose/status` for readiness. See [OpenPose setup](../openpose-pipeline/README.md) for installing either runtime.
+Run `python -m auth.create_admin` once after migrating. It prompts for an email and a password of 12–128 characters with echo disabled. Later account creation uses invitations. Apply `python -m alembic upgrade head` when upgrading the database schema.
 
-The React interface runs separately from `resident-interface/` with `npm run dev`.
+The backend defaults to `cpu` when `OPENPOSE_BACKEND` is unset. Set `$env:OPENPOSE_BACKEND = "wsl"` for NVIDIA/WSL. The authenticated station interface can check readiness at `GET /openpose/status`. See [OpenPose setup](../openpose-pipeline/README.md) for installing either runtime.
+
+The React interface runs separately from `resident-interface/` with `npm.cmd run dev -- --host 127.0.0.1`. Use `http://127.0.0.1:5173` for the default browser origin.
+
+## Identity configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `AUTH_DATABASE_URL` | SQLAlchemy database URL. Omit it to use the Git-ignored `station-service/auth.sqlite3`. For PostgreSQL install `psycopg[binary]`, set a `postgresql+psycopg://` URL in the environment, and run the same Alembic migrations. Keep database credentials out of Git and preserve user IDs when migrating data. |
+| `AUTH_WEB_ORIGIN` | Trusted web origin for credentialed CORS, browser writes, and generated invitation links. Defaults to `http://127.0.0.1:5173`. Set it to the actual HTTPS frontend origin for a deployed station, or include the new port if you change the local Vite port. |
+| `AUTH_ALLOW_INSECURE_LOCAL_HTTP` | Use `1` for local HTTP development on loopback. The backend accepts `127.0.0.1`, `localhost`, and `[::1]` on the configured frontend port in this mode. Leave it unset for deployment. |
+
+Deploy the web app and API over HTTPS on the same site. Browser login sets a host-only, HttpOnly, SameSite=Strict cookie that expires after eight hours. HTTPS cookies have the `Secure` flag and a `__Host-` prefix. Browser mutations require the configured origin. The database stores hashes of random authentication and invitation tokens, so there is no application signing secret. Passwords use Argon2id. Login attempts are limited in memory per source IP, and a multi-worker deployment should use a shared limit at its gateway.
+
+## Accounts and session ownership
+
+- Log in with email and password. `GET /auth/me` returns ID, email, and role. Logging out revokes the current credential on the server.
+- As an administrator, open **Invite Users** on Home, enter the resident's email, and copy the generated link to share privately. The link expires in 24 hours. The resident opens it, confirms the supplied email, sets a password, and logs in. There is no public signup form. An active account or a pending invitation for the same address returns a conflict.
+- Start a New Session while logged in to create an owned recording. The recorder writes the logged-in user's ID to `owner_user_id` in `metadata.json`. Residents can list, open, and review only their own sessions. Administrators see all sessions and the owner's email when available. A legacy directory without an owner appears as **Unassigned** for administrators.
+- To verify isolation, create two residents, record and save one session as each, and copy Resident B's Session Analysis URL while logged in as B. Log in as A in a separate browser profile. The list contains A's session and the direct URL for B's session returns `404` from the API. An administrator can open both.
 
 ## Important files
 
@@ -29,7 +51,8 @@ The React interface runs separately from `resident-interface/` with `npm run dev
 | `openpose_runner.py` | Starts CPU/WSL inference, tracks per-view stages, and supports posture-only retries. |
 | `posture_analysis_runner.py` | Runs posture analysis from existing OpenPose JSON and checks expected outputs. |
 | `analysis_status_store.py` | Reads and synchronizes atomic per-session status-file updates. |
-| `session_catalog.py`, `session_analysis_data.py` | Session listing/details and analysis data served to the UI. |
+| `session_access.py`, `session_catalog.py`, `session_analysis_data.py` | Ownership checks, session listing and details, and analysis data served to clients. |
+| `auth/`, `migrations/` | Database-backed identity, invitations, and authentication sessions. |
 | `analysis/` | BODY_25 JSON loading, posture metrics, and CSV/summary/plot generation. |
 | `sessions/` | Runtime session data; ignored by Git. |
 | `requirements.txt` | FastAPI, Uvicorn, OpenCV, and backend dependencies. |
@@ -67,11 +90,19 @@ Category and reference-zone percentages use valid tracked time. The API reports 
 
 ## API workflow
 
+- `POST /auth/login` accepts JSON with `email` and `password` and sets the browser cookie. `POST /auth/logout` revokes the current browser or native credential.
+- `POST /admin/invitations` creates a single-use resident invitation. The browser posts the token in JSON to `/auth/invitations/preview` and `/auth/invitations/accept`. Invitation links put the token in the URL fragment so it stays out of normal HTTP request URLs.
 - `GET /cameras` reads the cached camera inventory; `POST /cameras/rescan` refreshes it. `GET`/`PUT /camera-config` reads or saves assignments.
 - `POST /sessions/start` and `/sessions/stop` record a session; stop starts analysis in the background.
 - `GET /sessions` and `/sessions/{session_id}` provide saved session history and details.
 - `GET /sessions/{session_id}/analysis-status` reports progress.
 - `POST /sessions/{session_id}/analyze` starts the full OpenPose pipeline. `POST /sessions/{session_id}/analysis/{view}/retry` reruns posture analysis from existing JSON without rerunning OpenPose.
+
+## Native API and review media
+
+An Expo client uses its configured HTTPS API URL and sends `POST /auth/token` with JSON `email` and `password`. It uses the returned `access_token` as `Authorization: Bearer <token>` for `GET /auth/me`, `GET /sessions`, session detail, analysis status, and metric time series. Tokens expire after one hour. Reauthenticate on expiry. Keep the token in memory or use platform-backed secure storage if persistence is needed. Call `POST /auth/logout` to revoke the token.
+
+Native clients do not perform station camera or recording operations. Session detail returns `review_media_available: false` for native clients today. The workstation interface can still fetch selected frames and plots for authorized sessions while the local files are present. Raw and labeled video stay on the recording station. A shared service can centralize identities, ownership, summaries, and time series, then add optional compressed review uploads. The mobile UI should only show selected-frame controls when the API advertises accessible review media.
 
 ## Tests
 

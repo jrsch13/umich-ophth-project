@@ -20,6 +20,9 @@ cd station-service
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python -m alembic upgrade head
+python -m auth.create_admin # Run once, then use Invite Users to register residents.
+$env:AUTH_ALLOW_INSECURE_LOCAL_HTTP = "1"
 $env:OPENPOSE_BACKEND = "wsl" # Use "cpu" for the Windows CPU backend.
 uvicorn app:app --reload --host 127.0.0.1 --port 8000
 ```
@@ -32,17 +35,17 @@ Start the interface in another window:
 
 ```powershell
 cd resident-interface
-npm install
-npm run dev
+npm.cmd ci
+npm.cmd run dev -- --host 127.0.0.1
 ```
 
-Vite normally serves the UI at `http://localhost:5173`. It calls the station service at `http://127.0.0.1:8000`; that URL is configured in `resident-interface/src/stationApi.js`.
+Open [the station interface](http://127.0.0.1:5173) and log in. Residents register with an invitation from an administrator. The backend saves the signed-in owner's ID on new recordings. Administrators can see legacy recordings under **Unassigned**. See the [station setup and mobile API notes](./station-service/README.md) for database and HTTPS configuration.
 
 ## Interface
 
 | Page | Use |
 | --- | --- |
-| Home | Entry page for the station. |
+| Home | View the latest authorized session summary. Administrators can invite residents. |
 | New Session | Select the session label and record using the configured cameras. |
 | Session Analysis | Browse saved sessions, posture metrics, plots, and analysis status. |
 | Cameras | Preview cameras and configure or rescan Side and Rear assignments. |
@@ -64,10 +67,6 @@ Vite normally serves the UI at `http://localhost:5173`. It calls the station ser
 
 ## Remaining Work
 
-### Authentication / login
-
-Implement resident authentication and replace the current placeholder resident identity. No authentication provider is selected in this repository.
-
 ### Resident mobile application
 
-Create a React Native app for residents to review completed Session Analysis results on their phones. Mobile recording and OpenPose processing are not part of this planned scope.
+Build the React Native app on the authenticated identity, session list, and analysis endpoints. A shared deployment will need HTTPS and a central session catalog. Review media stays on the recording station until a separate upload workflow exists.

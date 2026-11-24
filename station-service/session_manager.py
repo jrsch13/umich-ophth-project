@@ -37,8 +37,8 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     temporary_path.replace(path)
 
 
-def _session_folder_name(resident_id: str) -> str:
-    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", resident_id).strip("_") or "session"
+def _session_folder_name(owner_user_id: str) -> str:
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", owner_user_id).strip("_") or "session"
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     return f"{safe_id}_{timestamp}"
 
@@ -48,10 +48,12 @@ class SessionManager:
         self._guard = threading.RLock()
         self._active_session: dict[str, Any] | None = None
 
-    def current(self) -> dict[str, Any]:
+    def current(self, *, owner_user_id: str | None = None) -> dict[str, Any]:
         with self._guard:
             session = self._active_session
-            if session is None:
+            if session is None or (
+                owner_user_id is not None and session["metadata"]["owner_user_id"] != owner_user_id
+            ):
                 return {"status": "idle"}
 
             elapsed = (time.perf_counter_ns() - session["started_perf_ns"]) / 1_000_000_000
@@ -68,7 +70,7 @@ class SessionManager:
                 "camera_errors": errors,
             }
 
-    def start(self, resident_id: str, session_label: str) -> dict[str, Any]:
+    def start(self, owner_user_id: str, session_label: str) -> dict[str, Any]:
         with self._guard:
             if self._active_session is not None:
                 raise SessionError(409, "A session is already recording. Stop it before starting another.")
@@ -149,7 +151,7 @@ class SessionManager:
 
                 try:
                     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-                    folder_name = _session_folder_name(resident_id)
+                    folder_name = _session_folder_name(owner_user_id)
                     session_dir = SESSIONS_DIR / folder_name
                     suffix = 1
                     while session_dir.exists():
@@ -212,7 +214,7 @@ class SessionManager:
                 session_id = session_dir.name
                 metadata = {
                     "session_id": session_id,
-                    "resident_or_study_id": resident_id,
+                    "owner_user_id": owner_user_id,
                     "session_label": session_label,
                     "status": "recording",
                     "started_at": started_at.isoformat(timespec="milliseconds"),
@@ -277,11 +279,13 @@ class SessionManager:
                     self._remove_failed_session(session_dir)
                 raise
 
-    def stop(self) -> dict[str, Any]:
+    def stop(self, *, owner_user_id: str | None = None) -> dict[str, Any]:
         with self._guard:
             session = self._active_session
             if session is None:
                 raise SessionError(409, "There is no active recording to stop.")
+            if owner_user_id is not None and session["metadata"]["owner_user_id"] != owner_user_id:
+                raise SessionError(404, "Session not found.")
 
             recorders: list[CameraRecorder] = session["recorders"]
             for recorder in recorders:
