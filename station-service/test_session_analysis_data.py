@@ -91,8 +91,8 @@ class SessionAnalysisDataTests(unittest.TestCase):
         self.assertEqual(result["above_threshold_percent"], 80.0)
 
     def test_category_duration_uses_timestamps_and_excludes_invalid_tracking(self) -> None:
-        self.write_video("side")
-        self.write_timestamps("side", [(0, 0.0), (1, 0.1), (2, 0.3)])
+        self.write_video("side", frame_count=4)
+        self.write_timestamps("side", [(0, 0.0), (1, 0.1), (2, 0.3), (3, 0.4)])
         self.write_metrics("side", (
             "Neck_Flexion_Extension",
             "Neck_RULA_Category",
@@ -100,20 +100,29 @@ class SessionAnalysisDataTests(unittest.TestCase):
             {"frame": 0, "Time_seconds": 0.0, "Neck_Flexion_Extension": 5.0, "Neck_RULA_Category": "flexion_0_10"},
             {"frame": 1, "Time_seconds": 0.1, "Neck_Flexion_Extension": "", "Neck_RULA_Category": ""},
             {"frame": 2, "Time_seconds": 0.3, "Neck_Flexion_Extension": 15.0, "Neck_RULA_Category": "flexion_10_20"},
+            {"frame": 3, "Time_seconds": 0.4, "Neck_Flexion_Extension": -1.0, "Neck_RULA_Category": "extension"},
         ])
 
         result = next(
-            item for item in posture_summaries(self.session_dir, {"duration_seconds": 0.5})
+            item for item in posture_summaries(self.session_dir, {"duration_seconds": 0.6})
             if item["metric"] == "neck_flexion_extension"
         )
         distribution = {
             item["key"]: item
             for item in result["category_distribution"]
         }
-        self.assertEqual(result["valid_tracking_seconds"], 0.3)
+        self.assertEqual(result["valid_tracking_seconds"], 0.4)
+        self.assertEqual(result["valid_tracking_percent"], 66.67)
         self.assertEqual(distribution["flexion_0_10"]["seconds"], 0.1)
-        self.assertEqual(distribution["flexion_10_20"]["seconds"], 0.2)
-        self.assertEqual(distribution["flexion_10_20"]["percent_of_valid_time"], 66.67)
+        self.assertEqual(distribution["flexion_10_20"]["percent_of_valid_time"], 25.0)
+        self.assertEqual(distribution["extension"]["percent_of_valid_time"], 50.0)
+        self.assertEqual(distribution["flexion_over_20"]["percent_of_valid_time"], 0.0)
+        exposure = result["reference_zone_exposure"]
+        self.assertEqual(exposure["rule_type"], "rula_reference_category")
+        self.assertEqual(exposure["within_seconds"], 0.1)
+        self.assertEqual(exposure["outside_seconds"], 0.3)
+        self.assertEqual(exposure["within_percent"], 25.0)
+        self.assertEqual(exposure["outside_percent"], 75.0)
 
     def test_missing_pose_intervals_are_excluded_from_within_threshold(self) -> None:
         self.write_video("side")
@@ -161,6 +170,49 @@ class SessionAnalysisDataTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["reason"], "analysis_not_available")
+        self.assertIsNone(result["reference_zone_exposure"]["within_percent"])
+        self.assertIsNone(result["reference_zone_exposure"]["outside_percent"])
+
+    def test_rear_reference_zones_use_saved_adjustment_states(self) -> None:
+        self.write_video("rear", frame_count=5)
+        self.write_timestamps("rear", [(frame, frame / 10) for frame in range(5)])
+        hiking = ["Neutral", "Unilateral Right Hiking", "Unilateral Left Hiking", "Bilateral Hiking", "Unknown"]
+        lateral = ["False", "True", "False", "True", ""]
+        self.write_metrics("rear", (
+            "Trunk_Lean",
+            "Trunk_Sidebend_Adjustment_Present",
+            "R_Shoulder_Hiking_Pct_Hip_Width",
+            "L_Shoulder_Hiking_Pct_Hip_Width",
+            "Shoulder_Hiking_Class",
+        ), [
+            {
+                "frame": frame,
+                "Time_seconds": frame / 10,
+                "Trunk_Lean": 0.0 if sidebend else "",
+                "Trunk_Sidebend_Adjustment_Present": sidebend,
+                "R_Shoulder_Hiking_Pct_Hip_Width": 18.0 if state in (hiking[1], hiking[3]) else 0.0,
+                "L_Shoulder_Hiking_Pct_Hip_Width": 18.0 if state in (hiking[2], hiking[3]) else 0.0,
+                "Shoulder_Hiking_Class": state,
+            }
+            for frame, (sidebend, state) in enumerate(zip(lateral, hiking))
+        ])
+        results = {
+            item["metric"]: item
+            for item in posture_summaries(self.session_dir, {"duration_seconds": 0.5})
+        }
+        for metric, within, outside in (("lateral_trunk_lean", 50.0, 50.0), ("shoulder_hiking", 25.0, 75.0)):
+            with self.subTest(metric=metric):
+                result = results[metric]
+                self.assertEqual(result["valid_tracking_percent"], 80.0)
+                exposure = result["reference_zone_exposure"]
+                self.assertEqual(exposure["rule_type"], "project_specific_rula_adjustment_detection")
+                self.assertEqual(exposure["within_percent"], within)
+                self.assertEqual(exposure["outside_percent"], outside)
+        self.assertEqual(
+            {category["key"]: category["rula_adjustment_present"]
+             for category in results["shoulder_hiking"]["category_distribution"]},
+            dict(zip(hiking[:4], (False, True, True, True))),
+        )
 
     def test_shoulder_exposure_uses_either_side_over_threshold(self) -> None:
         self.write_video("rear")
@@ -305,6 +357,9 @@ class SessionAnalysisDataTests(unittest.TestCase):
         )
         self.assertEqual(forward["valid_tracking_percent"], 100.0)
         self.assertEqual(forward["category_definition"]["upright_tolerance_degrees"], 5.0)
+        self.assertEqual(forward["reference_zone_exposure"]["within_percent"], 33.33)
+        self.assertEqual(forward["reference_zone_exposure"]["outside_percent"], 66.67)
+        self.assertEqual(forward["reference_zone_exposure"]["rule_type"], "project_specific_automation_tolerance")
         self.assertTrue(forward["legacy_binary_threshold_exposure_deprecated"])
         self.assertEqual(
             detail["views"]["side"]["summary"]["categorization_tolerances"]["trunk_rula_upright_degrees"]["value"],

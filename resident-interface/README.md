@@ -36,3 +36,32 @@ npm run build
 ```
 
 The station-service owns physical cameras and recording. The UI reads session results from backend APIs; posture calculations run in Python, not React.
+
+## Develop with a demo Session Analysis recording
+
+With the station-service virtual environment and React dependencies installed, run these commands from the repository root in one PowerShell terminal:
+
+```powershell
+cd station-service
+.\.venv\Scripts\python.exe demo_session.py create
+.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000 --lifespan off
+```
+
+If the backend from this checkout is already running on port 8000, run `demo_session.py create` and refresh the session list.
+
+In a second PowerShell terminal at the repository root, start React:
+
+```powershell
+cd resident-interface
+npm.cmd run dev -- --host 127.0.0.1
+```
+
+Open [Session Analysis](http://127.0.0.1:5173/history) and select **DEMO — RULA UI Test**. Select each posture card and click points on its time series to see the corresponding labeled demo frames.
+
+The script creates an ignored local session with prewritten posture CSVs and synthetic video clips. It requires neither OpenPose nor a GPU. The `--lifespan off` launch option skips camera startup for this Session Analysis preview.
+
+When finished, run this from `station-service/` and refresh Session Analysis:
+
+```powershell
+.\.venv\Scripts\python.exe demo_session.py remove
+```

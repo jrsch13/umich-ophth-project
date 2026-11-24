@@ -9,7 +9,6 @@ import {
   PieChart,
   ReferenceArea,
   ReferenceDot,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -26,45 +25,45 @@ const POSTURE_METRICS = [
     key: 'neck_flexion_extension',
     label: 'Neck flexion / extension',
     view: 'side',
-    explanation: 'RULA categorizes neck posture by increasing flexion and treats extension as a separate posture category. Higher posture scores represent greater deviation from neutral.',
   },
   {
     key: 'shoulder_hiking',
     label: 'Shoulder hiking',
     view: 'rear',
-    explanation: 'RULA adds an adjustment when a shoulder is raised. The prototype estimates shoulder elevation relative to hip width and distinguishes unilateral and bilateral shoulder hiking.',
+    categoryExplanation: 'RULA adjusts the upper-arm posture score when a shoulder is raised. The right, left, and bilateral classes provide additional feedback from the prototype.',
   },
   {
     key: 'forward_trunk_lean',
     label: 'Forward trunk lean',
     view: 'side',
-    explanation: 'RULA increases the trunk posture score as forward flexion increases.',
   },
   {
     key: 'lateral_trunk_lean',
     label: 'Lateral trunk lean',
     view: 'rear',
-    explanation: 'RULA adds a posture adjustment when trunk side-bending is present. The prototype uses measured lateral trunk angle to automate whether this adjustment is applied.',
   },
 ]
 
+const WITHIN_ZONE_COLOR = '#4d9475'
+const OUTSIDE_ZONE_COLOR = '#b94f55'
+
 const RULA_SCORE_COLORS = {
-  1: '#4d9475',
+  1: WITHIN_ZONE_COLOR,
   2: '#b59a3d',
   3: '#dc8138',
-  4: '#b94f55',
+  4: OUTSIDE_ZONE_COLOR,
 }
 
 const STATE_COLORS = {
   shoulder_hiking: {
-    Neutral: '#7d91a0',
-    'Unilateral Right Hiking': '#3b83a0',
-    'Unilateral Left Hiking': '#c28a3b',
-    'Bilateral Hiking': '#8064a2',
+    Neutral: WITHIN_ZONE_COLOR,
+    'Unilateral Right Hiking': '#dc8138',
+    'Unilateral Left Hiking': '#b76324',
+    'Bilateral Hiking': OUTSIDE_ZONE_COLOR,
   },
   lateral_trunk_lean: {
-    'False': '#7d91a0',
-    'True': '#c07839',
+    False: WITHIN_ZONE_COLOR,
+    True: OUTSIDE_ZONE_COLOR,
   },
 }
 
@@ -112,6 +111,50 @@ function categoryFor(summary, key) {
 
 function formatPercent(value) {
   return Number.isFinite(value) ? `${value}%` : 'Unavailable'
+}
+
+function PostureDonut({ label, slices }) {
+  return (
+    <div className='posture-donut'>
+      {slices.length ? (
+        <div
+          role='img'
+          aria-label={`${label}. ${slices.map((slice) => `${slice.label}, ${formatPercent(slice.percent)}`).join('. ')}`}
+        >
+          <PieChart width={108} height={108} aria-hidden='true' accessibilityLayer={false}>
+            <Pie
+              data={slices}
+              dataKey='percent'
+              nameKey='label'
+              innerRadius={30}
+              outerRadius={45}
+              stroke='#fff'
+              strokeWidth={2}
+              isAnimationActive={false}
+            >
+              {slices.map((slice) => <Cell key={slice.label} fill={slice.color} />)}
+            </Pie>
+          </PieChart>
+        </div>
+      ) : (
+        <div className='posture-donut-empty' aria-hidden='true'>—</div>
+      )}
+    </div>
+  )
+}
+
+function ExposureLegend({ slices }) {
+  return (
+    <div className='posture-exposure-legend'>
+      {slices.map((slice) => (
+        <span key={slice.label}>
+          <i className='legend-swatch' style={{ backgroundColor: slice.color }} aria-hidden='true' />
+          <span>{slice.label}</span>
+          <strong>{formatPercent(slice.percent)}</strong>
+        </span>
+      ))}
+    </div>
+  )
 }
 
 function statusDisplay(status, stage) {
@@ -212,11 +255,13 @@ function PostureSummaryCard({
   const notRecorded = summary?.reason === 'view_not_recorded'
   const insufficient = summary?.status === 'insufficient_tracking'
     && summary.reason === 'no_valid_tracking'
-  const categories = summary?.category_distribution || []
-  const hasCategories = summary?.status === 'available' && categories.length > 0
-  const uprightTolerance = definition.key === 'forward_trunk_lean'
-    ? summary?.category_definition?.upright_tolerance_degrees
-    : null
+  const exposure = summary?.reference_zone_exposure
+  const slices = Number.isFinite(exposure?.within_percent) && Number.isFinite(exposure?.outside_percent)
+    ? [
+        { label: 'Within reference zone', percent: exposure.within_percent, color: WITHIN_ZONE_COLOR },
+        { label: 'Outside reference zone', percent: exposure.outside_percent, color: OUTSIDE_ZONE_COLOR },
+      ]
+    : []
   const unavailableText = notRecorded
     ? 'View not recorded'
     : isPending
@@ -235,61 +280,11 @@ function PostureSummaryCard({
       aria-pressed={selected}
       onClick={onSelect}
     >
-      <div className='posture-donut'>
-        {hasCategories ? (
-          <div
-            role='img'
-            aria-label={`${definition.label}: ${categories.map((category) => `${category.label}, ${formatPercent(category.percent_of_valid_time)}`).join('; ')}`}
-          >
-            <PieChart width={108} height={108} aria-hidden='true'>
-              <Pie
-                data={categories}
-                dataKey='percent_of_valid_time'
-                nameKey='label'
-                innerRadius={30}
-                outerRadius={45}
-                stroke='#fff'
-                strokeWidth={2}
-                isAnimationActive={false}
-              >
-                {categories.map((category) => (
-                  <Cell
-                    key={category.key}
-                    fill={categoryColor(definition.key, category)}
-                  />
-                ))}
-              </Pie>
-            </PieChart>
-          </div>
-        ) : (
-          <div className='posture-donut-empty' aria-hidden='true'>—</div>
-        )}
-      </div>
+      <PostureDonut label={definition.label} slices={slices} />
       <div className='posture-card-content'>
         <h3>{definition.label}</h3>
-        <p>{definition.explanation}</p>
-        {Number.isFinite(uprightTolerance) ? (
-          <p className='posture-project-note'>
-            Because computer-vision measurements rarely equal exactly 0°, this prototype uses a ±{uprightTolerance}° project-specific automation tolerance to identify the RULA upright category. This is not a RULA-defined threshold.
-          </p>
-        ) : null}
-        {hasCategories ? (
-          <div className='posture-exposure-legend'>
-            {categories.map((category) => (
-              <span key={category.key}>
-                <i
-                  className='legend-swatch'
-                  style={{ backgroundColor: categoryColor(definition.key, category) }}
-                  aria-hidden='true'
-                />
-                <span>
-                  {category.label}
-                  {Number.isFinite(category.rula_score) ? ` · RULA ${category.rula_score}` : ''}
-                </span>
-                <strong>{formatPercent(category.percent_of_valid_time)}</strong>
-              </span>
-            ))}
-          </div>
+        {slices.length ? (
+          <ExposureLegend slices={slices} />
         ) : (
           <span className={`posture-card-state${isFailed ? ' failed' : ''}`} role='status'>
             {unavailableText}
@@ -298,13 +293,40 @@ function PostureSummaryCard({
         {Number.isFinite(summary?.valid_tracking_percent) ? (
           <small
             className='posture-tracking'
-            title='Percentage of session time for which the required OpenPose landmarks were available and the posture metric could be calculated.'
+            title={summary.reason === 'category_data_unavailable'
+              ? 'No posture categories were saved for this measurement, so none of the trial time could be counted as successfully analyzed.'
+              : 'Share of total trial time with a valid result for this measurement. Time is excluded when OpenPose misses required body landmarks, their confidence is too low, or frame data is missing or unusable.'}
           >
-            Valid tracking: {formatPercent(summary.valid_tracking_percent)} ⓘ
+            % of Trial Successfully Analyzed: {formatPercent(summary.valid_tracking_percent)} ⓘ
           </small>
         ) : null}
+        {exposure?.rule_explanation ? <p className='posture-reference-note'>Reference zone: {exposure.rule_explanation}</p> : null}
       </div>
     </button>
+  )
+}
+
+function PostureCategoryCard({ metric, summary }) {
+  const slices = (summary?.category_distribution || []).map((category) => ({
+    label: Number.isFinite(category.rula_score)
+      ? `${category.label} · RULA ${category.rula_score}`
+      : category.label,
+    percent: category.percent_of_valid_time,
+    color: categoryColor(metric.key, category),
+  }))
+  const explanation = metric.categoryExplanation || summary?.reference_zone_exposure?.rule_explanation
+
+  return (
+    <section className='card posture-category-card'>
+      <h4>RULA category breakdown</h4>
+      {slices.length ? (
+        <div className='posture-category-content'>
+          <PostureDonut label={`${metric.label} categories`} slices={slices} />
+          <ExposureLegend slices={slices} />
+        </div>
+      ) : <p className='muted'>Category data is unavailable for this posture.</p>}
+      {explanation ? <p className='posture-reference-note'>{explanation}</p> : null}
+    </section>
   )
 }
 
@@ -557,7 +579,6 @@ function PostureOverTime({ sessionId, metric, summary }) {
           <h3>{metric.label}</h3>
         </div>
       </div>
-      <div className='posture-over-time-layout'>
         <div className='card posture-chart-card'>
           {seriesLoading || (canLoad && !series && !seriesError) ? <p className='muted'>Loading posture time series…</p>
             : seriesError ? <p className='posture-load-error' role='alert'>{seriesError}</p>
@@ -694,6 +715,8 @@ function PostureOverTime({ sessionId, metric, summary }) {
                     </>
                   )}
         </div>
+      <div className='posture-detail-grid'>
+        <PostureCategoryCard metric={metric} summary={summary} />
         <aside className='card selected-frame-card' aria-live='polite'>
           <h4>Selected frame</h4>
           {!selectedPoint ? <p className='muted'>Select a point on the graph to view that moment in the session.</p>
@@ -739,10 +762,10 @@ function PostureOverTime({ sessionId, metric, summary }) {
                     </dd>
                   </div>
                   {selectedCategory ? <div><dt>Classification</dt><dd>{selectedCategory.label}</dd></div> : null}
-                  {selectedPoint.category ? (
+                  {typeof selectedCategory?.rula_adjustment_present === 'boolean' ? (
                     <div>
                       <dt>RULA raised-shoulder adjustment</dt>
-                      <dd>{selectedPoint.category === 'Neutral' ? 'Not present' : 'Present'}</dd>
+                      <dd>{selectedCategory.rula_adjustment_present ? 'Present' : 'Not present'}</dd>
                     </div>
                   ) : null}
                 </>
@@ -833,10 +856,9 @@ function SessionDetail({ detail, status, recordedAt, retryingView, onRetry }) {
     <section className='posture-summary-section'>
       <div className='posture-section-heading'>
         <div>
-          <p className='eyebrow'>POSTURE SUMMARY</p>
-          <h3>RULA-Aligned Posture Exposure</h3>
+          <h3>Reference Zone Exposure</h3>
           <p className='posture-method-note'>
-            This prototype automates selected posture components from the Rapid Upper Limb Assessment (RULA). It does not calculate the complete RULA grand score.
+            This prototype automates selected posture components from RULA. Reference-zone rules include both RULA categories and project-specific computer-vision detection tolerances. The system does not calculate the complete RULA grand score.
           </p>
           <a
             className='posture-source-link'

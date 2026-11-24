@@ -23,6 +23,14 @@ VIEWS = ("side", "rear")
 
 
 @dataclass(frozen=True)
+class ReferenceZoneRule:
+    category: str
+    label: str
+    rule_type: str
+    explanation: str
+
+
+@dataclass(frozen=True)
 class MetricSpec:
     key: str
     label: str
@@ -30,6 +38,9 @@ class MetricSpec:
     threshold_key: str
     columns: tuple[str, ...]
     unit: str
+    category_column: str
+    categories: dict[str, tuple[str, int | None]]
+    reference_zone: ReferenceZoneRule
     absolute_threshold: bool = True
     posture_angle_column: str | None = None
     posture_angle_absolute: bool = False
@@ -43,6 +54,22 @@ METRIC_SPECS = {
         threshold_key="Neck_Flexion_Extension",
         columns=("Neck_Flexion_Extension",),
         unit="degrees",
+        category_column="Neck_RULA_Category",
+        categories={
+            "flexion_0_10": ("0–10° flexion", 1),
+            "flexion_10_20": ("10–20° flexion", 2),
+            "flexion_over_20": (">20° flexion", 3),
+            "extension": ("Extension", 4),
+        },
+        reference_zone=ReferenceZoneRule(
+            category="flexion_0_10",
+            label="0–10° neck flexion",
+            rule_type="rula_reference_category",
+            explanation=(
+                "0–10° neck flexion (RULA neck posture score 1). "
+                "Greater flexion and any detected extension fall outside the reference zone."
+            ),
+        ),
         posture_angle_column="Neck_Angle_Deg",
     ),
     "shoulder_hiking": MetricSpec(
@@ -55,6 +82,23 @@ METRIC_SPECS = {
             "L_Shoulder_Hiking_Pct_Hip_Width",
         ),
         unit="% of hip width",
+        category_column="Shoulder_Hiking_Class",
+        categories={
+            "Neutral": ("Neutral", None),
+            "Unilateral Right Hiking": ("Unilateral Right Hiking", None),
+            "Unilateral Left Hiking": ("Unilateral Left Hiking", None),
+            "Bilateral Hiking": ("Bilateral Hiking", None),
+        },
+        reference_zone=ReferenceZoneRule(
+            category="Neutral",
+            label="Neutral",
+            rule_type="project_specific_rula_adjustment_detection",
+            explanation=(
+                "Neutral. RULA adjusts the upper-arm posture score when a shoulder is raised. "
+                "The prototype uses a project-specific research threshold of "
+                f'{DEFAULT_THRESHOLDS["Shoulder_Hiking"]:g}% of hip width or more to detect elevation.'
+            ),
+        ),
         absolute_threshold=False,
     ),
     "forward_trunk_lean": MetricSpec(
@@ -64,6 +108,23 @@ METRIC_SPECS = {
         threshold_key="Trunk_Flexion_Extension",
         columns=("Trunk_Flexion_Extension",),
         unit="degrees",
+        category_column="Trunk_RULA_Category",
+        categories={
+            "upright": ("Approximately upright", 1),
+            "flexion_0_20": ("0–20° flexion", 2),
+            "flexion_20_60": ("20–60° flexion", 3),
+            "flexion_over_60": (">60° flexion", 4),
+        },
+        reference_zone=ReferenceZoneRule(
+            category="upright",
+            label="Approximately upright",
+            rule_type="project_specific_automation_tolerance",
+            explanation=(
+                "Approximately upright. The prototype uses a "
+                f"±{UPRIGHT_TOLERANCE_DEG:g}° project-specific computer-vision tolerance "
+                "to identify upright posture."
+            ),
+        ),
         posture_angle_column="Trunk_Angle_Deg",
         posture_angle_absolute=True,
     ),
@@ -74,6 +135,21 @@ METRIC_SPECS = {
         threshold_key="Trunk_Leaning",
         columns=("Trunk_Lean",),
         unit="degrees",
+        category_column="Trunk_Sidebend_Adjustment_Present",
+        categories={
+            "False": ("No side-bending adjustment", None),
+            "True": ("Side-bending adjustment present", None),
+        },
+        reference_zone=ReferenceZoneRule(
+            category="False",
+            label="No trunk side-bending adjustment",
+            rule_type="project_specific_rula_adjustment_detection",
+            explanation=(
+                "No side-bending adjustment. RULA uses a single +1 adjustment for trunk "
+                "side-bending. The prototype applies it at an absolute lateral tilt of "
+                f'{DEFAULT_THRESHOLDS["Trunk_Leaning"]:g}° or more using a project-specific detection tolerance.'
+            ),
+        ),
         posture_angle_column="Lateral_Lean_Deg",
     ),
 }
@@ -281,6 +357,15 @@ def _base_summary(
         "above_threshold_percent": None,
         "valid_tracking_seconds": None,
         "valid_tracking_percent": None,
+        "reference_zone_exposure": {
+            "within_seconds": None,
+            "outside_seconds": None,
+            "within_percent": None,
+            "outside_percent": None,
+            "rule_label": spec.reference_zone.label,
+            "rule_type": spec.reference_zone.rule_type,
+            "rule_explanation": spec.reference_zone.explanation,
+        },
         "total_session_seconds": (
             round(total_session_seconds, 3) if total_session_seconds is not None else None
         ),
@@ -343,13 +428,7 @@ def _summarize_metric(
     legacy_valid_seconds = 0.0
     above_seconds = 0.0
     within_seconds = 0.0
-    category_seconds: dict[str, float] = {}
-    category_column = {
-        "neck_flexion_extension": "Neck_RULA_Category",
-        "forward_trunk_lean": "Trunk_RULA_Category",
-        "lateral_trunk_lean": "Trunk_Sidebend_Adjustment_Present",
-        "shoulder_hiking": "Shoulder_Hiking_Class",
-    }[spec.key]
+    category_seconds = dict.fromkeys(spec.categories, 0.0)
     for row, interval in zip(rows, intervals):
         if interval <= 0:
             continue
@@ -362,48 +441,11 @@ def _summarize_metric(
             else:
                 within_seconds += interval
 
-        category = str(row.get(category_column, "")).strip()
-        if category and category.lower() not in {"", "nan", "none", "unknown"}:
-            category_seconds[category] = (
-                category_seconds.get(category, 0.0) + interval
-            )
+        category = str(row.get(spec.category_column, "")).strip()
+        if category in category_seconds:
+            category_seconds[category] += interval
 
-    category_labels = {
-        "flexion_0_10": "0-10 degrees flexion",
-        "flexion_10_20": "10-20 degrees flexion",
-        "flexion_over_20": "Over 20 degrees flexion",
-        "extension": "Extension",
-        "upright": "Approximately upright",
-        "flexion_0_20": "0-20 degrees flexion",
-        "flexion_20_60": "20-60 degrees flexion",
-        "flexion_over_60": "Over 60 degrees flexion",
-        "True": "Trunk side-bending adjustment present",
-        "False": "No trunk side-bending adjustment",
-    }
-    category_scores = {
-        "flexion_0_10": 1,
-        "flexion_10_20": 2,
-        "flexion_over_20": 3,
-        "extension": 4,
-        "upright": 1,
-        "flexion_0_20": 2,
-        "flexion_20_60": 3,
-        "flexion_over_60": 4,
-    }
     valid_seconds = sum(category_seconds.values())
-    category_distribution = []
-    for category, seconds in sorted(category_seconds.items()):
-        category_distribution.append({
-            "key": category,
-            "label": category_labels.get(category, category),
-            "rula_score": category_scores.get(category),
-            "seconds": round(seconds, 3),
-            "percent_of_valid_time": (
-                round(seconds / valid_seconds * 100.0, 2)
-                if valid_seconds > 0
-                else None
-            ),
-        })
     summary.update({
         "valid_tracking_seconds": round(valid_seconds, 3),
         "valid_tracking_percent": (
@@ -411,20 +453,45 @@ def _summarize_metric(
             if total_session_seconds and total_session_seconds > 0
             else None
         ),
-        "category_distribution": category_distribution,
     })
     if valid_seconds <= 0:
         summary["reason"] = (
             "category_data_unavailable"
-            if category_column not in rows[0]
+            if spec.category_column not in rows[0]
             else "no_valid_tracking"
         )
         return summary
 
+    in_zone_seconds = category_seconds[spec.reference_zone.category]
+    outside_zone_seconds = sum(
+        seconds for category, seconds in category_seconds.items()
+        if category != spec.reference_zone.category
+    )
+    summary["reference_zone_exposure"].update({
+        "within_seconds": round(in_zone_seconds, 3),
+        "outside_seconds": round(outside_zone_seconds, 3),
+        "within_percent": round(in_zone_seconds / valid_seconds * 100.0, 2),
+        "outside_percent": round(outside_zone_seconds / valid_seconds * 100.0, 2),
+    })
     summary.update({
         "status": "available",
         "available": True,
         "reason": None,
+        "category_distribution": [
+            {
+                "key": category,
+                "label": label,
+                "rula_score": score,
+                "rula_adjustment_present": (
+                    category != spec.reference_zone.category
+                    if spec.reference_zone.rule_type == "project_specific_rula_adjustment_detection"
+                    else None
+                ),
+                "seconds": round(category_seconds[category], 3),
+                "percent_of_valid_time": round(category_seconds[category] / valid_seconds * 100.0, 2),
+            }
+            for category, (label, score) in spec.categories.items()
+        ],
     })
     if legacy_valid_seconds > 0:
         summary.update({
@@ -504,25 +571,19 @@ def _point(row: dict[str, str], spec: MetricSpec, recorded_times: dict[int, floa
             "right_value": round(values[0], 6) if values[0] is not None else None,
             "left_value": round(values[1], 6) if values[1] is not None else None,
         }
-        if "Shoulder_Hiking_Class" in row:
-            point["category"] = row.get("Shoulder_Hiking_Class") or None
+        if spec.category_column in row:
+            category = row.get(spec.category_column)
+            point["category"] = category if category in spec.categories else None
         return point
     value = values[0]
     if value is None:
         return None
-    category_column = {
-        "neck_flexion_extension": "Neck_RULA_Category",
-        "forward_trunk_lean": "Trunk_RULA_Category",
-        "lateral_trunk_lean": "Trunk_Sidebend_Adjustment_Present",
-    }.get(spec.key)
-    category = row.get(category_column) if category_column else None
-    if category in ("", "nan", "None"):
-        category = None
+    category = row.get(spec.category_column)
     point = {
         "time_seconds": round(seconds, 6),
         "frame": frame,
         "value": round(value, 6),
-        "category": category,
+        "category": category if category in spec.categories else None,
     }
     if spec.posture_angle_column:
         posture_angle = _number(row.get(spec.posture_angle_column))
